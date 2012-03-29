@@ -20,8 +20,6 @@ from scipy import stats # calculate pdf of gaussian
 from gensim import interfaces, utils # take the advantages of gensim provides
 from sklearn.covariance import LedoitWolf  # to perform covariance shrinkage
 
-
-
 np.random.seed(1000000001)
 meanchangethresh = 0.001
 
