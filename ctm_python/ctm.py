@@ -4,23 +4,25 @@
 # The bone structure follows Hoffmann's OnlineVB Python code.
 
 # use logging tools to keep track of the behaviors
-import cPickle
-import math
-import logging
-import itertools
+import os  		# to do folder process
+import random   	# to generate random number
+import cPickle	# to write in files
+import math 		# just math stuff
+import logging	# having decided to use this or not
+import itertools	# do iteration work, obviously
 
-import os # to do folder process
-import random # to generate random number
-import numpy as np
+import numpy as np 	# standard numpy 
+from scipy.special import gammaln, digamma, psi 	# gamma function utils
+# log(sum(exp(x))) that tries to avoid overflow
+from scipy.maxentropy import logsumexp 	
+# Minimize a function using a nonlinear conjugate gradient algorithm.
+from scipy.optimize import fmin_cg 	
+from scipy import stats  							# calculate pdf of gaussian
+# take the advantages of gensim provides
+from gensim import interfaces, utils 
+#  mainly to perform covariance shrinkage
+from sklearn.covariance import LedoitWolf 
 
-from scipy.special import gammaln, digamma, psi # gamma function utils
-from scipy.maxentropy import logsumexp # log(sum(exp(x))) that tries to avoid overflow
-from scipy.optimize import fmin_cg
-from scipy import stats # calculate pdf of gaussian
-from gensim import interfaces, utils # take the advantages of gensim provides
-from sklearn.covariance import LedoitWolf  # to perform covariance shrinkage
-
-np.random.seed(1000000001)
 meanchangethresh = 0.001
 
 def dirichlet_expectation(alpha):
@@ -101,7 +103,7 @@ class CTM:
 	Correlated Topic Models in Python
 
 	"""
-	def __init__(self, vocab, K, D, mu, cov, eta):
+	def __init__(self, vocab, K, D, mu, cov):
 	'''
 	Arguments:
 		K: Number of topics
@@ -118,32 +120,30 @@ class CTM:
 			word = re.sub(r'[^a-z]', '', word)
 			self._vocab[word] = len(self._vocab)
 
-		self._K = K # number of topics
-		self._W = len(self._vocab) # number of all the words
-		self._D = D # number of documents
-
-		# according to blei's code, mu is a K-size vector with 0 value
-		# cov is a K*K matrix with each element 1
-		# together they make a Gaussian 
-		if mu is None:
-			self.mu = np.zeros(self._K) 
-		else:
-			self.mu = mu
-
-		if cov is None:
-			self.cov = np.ones(self._K, self._K)
-		else:
-			self.cov = cov
-		# eta is the hyperparameter of the topic 
-		if eta is None:
-			self.eta = 1.0 / K
-
-		self.inv_cov = np.linalg.inv(self.cov)
-		self.log_det_inv_cov = np.log(np.linalg.det(self.inv_cov))
+		self._K = K 					# number of topics
+		self._W = len(self._vocab) 	# number of all the words
+		self._D = D 					# number of documents
 
 		(wordids, wordcts) = parse_doc_list(docs, self._vocab)
 		self.wordids = wordids
 		self.wordcts = wordcts
+		# distinct number of terms, I don't know what's the use for this, but just 
+		# leave it here
+		self.nterms = len(self.wordids) 
+
+		# mu : K-size vector with 0 as initial value
+		# cov  : K*K matrix with 1 as initial value , together they make a Gaussian 
+		if mu is None:
+			self.mu = np.zeros(self._K) 
+		else:
+			self.mu = mu
+		if cov is None:
+			self.cov = np.ones(self._K, self._K)
+		else:
+			self.cov = cov
+
+		self.inv_cov = np.linalg.inv(self.cov)
+		self.log_det_inv_cov = np.log(np.linalg.det(self.inv_cov))
 
 		# initialize topic distribution, i.e. log_beta
 		seed = 1115574245
@@ -153,8 +153,7 @@ class CTM:
 			for n in xrange(self._W):
 				log_beta[i,n] = wordcts[i,n] + 1.0 +np.random.randint(seed) 
 				# to initialize and smooth
-				sum += log_beta[i,n]
-		sum = np.log(sum)
+		sum = np.log(np.sum(log_beta))
 		# construct a small function inc in order to use map function
 		# to normalize log_beta
 		def inc(x):
@@ -561,144 +560,40 @@ class CTM:
 		with open('phi_sums','w') as phi_sums_dump:
 			cPickle.dump(phi_sums,phi_sums_dump)
 
-	# for each partially observed document: (a) perform inference on the
-	# observations (b) take expected theta and compute likelihood
-	def pod_experiment(self):
-		# read in observed data and held-out data
-		# or split the corpus into two parts
-
-		
-		
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-			
-
-
 	
+	def pod_experiment(self, docs, proportions = 0.5):
+		'''
+		read in corpus ,and split it into observed data and held-out data
+		 ` proportions` indicates the ratio of the split
+
+		for each partially observed document: (a) perform inference on the
+		 observations (b) take expected theta and compute likelihood
+
+		'''
+		permute_docs = np.random.permutation(docs)
+		split_point = proportions * len(docs)
+		obs_docs = permute_docs[:split_point]
+		heldout_docs = permute_docs[split_point:]
+
+		log_lhood = np.zeros(self._D)
+		e_theta = np.zeros(self._K)
+		for i in range(len(obs_docs)):
+			# get observed and heldout documents
+			obs_doc = obs_docs[i]
+			heldout_doc = heldout_docs[i]
+			#  compute variational distribution
+			# initial variational parameters
+			init_var_para()
+			var_inference()
+			expected_theta()
+			#  approximate inference of held out data
+			l = log_mult_prob(heldout_doc, e_theta, log_beta)
+			log_lhood[i] = l
+			total_words += len(heldout_doc[0]) 
+			# TODO : make clear here  whether it is `heldout_doc[0] 
+			# or `heldout_doc`
+			total_lhood += l
+		perplexity = np.exp(- total_lhood / total_words)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-		
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	  
-	
-
-		
-
-
-
-
-
-		
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-			
-
-
-
-
-
-
-
-
-
-
-
-					
-
-
-
-
-
-
-
-
-
-
-		
 
 
