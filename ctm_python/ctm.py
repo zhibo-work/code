@@ -149,27 +149,33 @@ class CTM:
 		seed = 1115574245
 		sum = 0
 		log_beta = np.zeros([self._K,self._W])
-		for i in xrange(self._K):
-			for n in xrange(self._W):
-				log_beta[i,n] = wordcts[i,n] + 1.0 +np.random.randint(seed) 
-				# to initialize and smooth
+
+		# little function to perform element summation
+		def element_add_1(x):
+			return x + 1.0 + np.random.randint(seed)
+		log_beta = map(element_add_1, wordcts)
+		# for i in xrange(self._K):
+		# 	for n in xrange(self._W):
+		# 		log_beta[i,n] = wordcts[i,n] + 1.0 +np.random.randint(seed) 
+		# to initialize and smooth
 		sum = np.log(np.sum(log_beta))
-		# construct a small function inc in order to use map function
-		# to normalize log_beta
-		def inc(x):
+		
+		# little function to normalize log_beta
+		def element_add_2(x):
 			return x + np.log(x-sum)
-		log_beta = map(inc,log_beta)
+		log_beta = map(element_add_2,log_beta)
 
-	# before the actual variational inference 
-	# below are some funtions to deal with the variational
-	# parameters to be used in variational inference, namely 
-	# add '_v' to indicate variational parameter
-	# * zeta_v
-	# * phi_v
-	# * lambda, we call it lambda_v in order to distinguish 
-	#     it from python's own function name. 
-	# * nu_v 
-
+	'''
+	before the actual variational inference 
+	below are some funtions to deal with the variational
+	parameters to be used in variational inference, namely 
+	add '_v' to indicate variational parameter
+	* zeta_v
+	* phi_v
+	* lambda_v, in order to distinguish python's own function name. 
+	* nu_v 
+	'''
+	
 	# the next function correspond to eq.7 in ctm paper, which 
 	# is the upper bound
 	def expect_mult_norm(self, lambda_v, nu_v, zeta_v):
@@ -177,7 +183,6 @@ class CTM:
 		bound = (1.0 / zeta_v) * sum_exp - 1.0 + np.log(zeta_v)
 
 	def lhood_bnd(self):
-		k = self._K
 		topic_scores = np.zeros(self._K)
 
 		# E[log p(\eta | \mu, \Sigma)] + H(q(\eta | \lambda, \nu)
@@ -201,8 +206,9 @@ class CTM:
 	# optimize zeta
 	def opt_zeta(self):
 		zeta_v = 1.0
-		for  i in range(self._K):
-			zeta_v += np.exp(lambda_v[i] + (0.5) * nu_v[i])
+		zeta_v += np.sum(np.exp(lambda_v + np.dot(0.5 ,nu_v)))
+		# for  i in range(self._K):
+		# 	zeta_v += np.exp(lambda_v[i] + (0.5) * nu_v[i])
 
 	# optimize phi
 	def opt_phi(self):
@@ -223,7 +229,8 @@ class CTM:
 
 	# optimize lambda
 	def f_lambda(self):
-		temp = [[0 for i in range(self._K)] for j in range(4)]
+		temp = np.zeros((4,self._K))
+		# temp = [[0 for i in range(self._K)] for j in range(4)]
 		term1 = term2 = term3 = 0
 
 		# compute lambda^T * \sum phi
@@ -254,10 +261,10 @@ class CTM:
 		df -= np.subtract(np.subtract(temp[0], sum_phi),temp[3])
 
 	def opt_lambda(self): 
-		sum_phi = np.array([0 for i in range(self._K)])
+		sum_phi = np.zeros(self._K)
 		for i in range(self._W):
 			for j in range(self._K):
-				sum_phi[j] += self.wordcts[i] * phi_v][i,j]
+				sum_phi[j] = self.wordcts[i] * phi_v[i,j]
 
 		lambda_v = fmin_cg(f_lambda,x0, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 
