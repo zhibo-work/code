@@ -246,8 +246,6 @@ class CTM:
 		term3 = -(np.add(np.subtract(np.dot((1.0/zeta_v), term3), 1.0), np.log(zeta_v))) * self._W
 		return -(term1 + term2 + term3)
 
-	# test git
-
 	def df_lambda(self):
 		# compute \Sigma^{-1} (\mu - \lambda)
 		temp[0] = np.zeros(self._K)
