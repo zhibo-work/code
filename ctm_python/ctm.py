@@ -145,25 +145,25 @@ class CTM:
 		self.inv_cov = np.linalg.inv(self.cov)
 		self.log_det_inv_cov = np.log(np.linalg.det(self.inv_cov))
 
-		# initialize topic distribution, i.e. log_beta
+		# initialize topic distribution, i.e. self.log_beta
 		seed = 1115574245
 		sum = 0
-		log_beta = np.zeros([self._K,self._W])
+		self.log_beta = np.zeros([self._K,self._W])
 
 		# little function to perform element summation
 		def element_add_1(x):
 			return x + 1.0 + np.random.randint(seed)
-		log_beta = map(element_add_1, wordcts)
+		self.log_beta = map(element_add_1, wordcts)
 		# for i in xrange(self._K):
 		# 	for n in xrange(self._W):
-		# 		log_beta[i,n] = wordcts[i,n] + 1.0 +np.random.randint(seed) 
+		# 		self.log_beta[i,n] = wordcts[i,n] + 1.0 +np.random.randint(seed) 
 		# to initialize and smooth
-		sum = np.log(np.sum(log_beta))
+		sum = np.log(np.sum(self.log_beta))
 		
-		# little function to normalize log_beta
+		# little function to normalize self.log_beta
 		def element_add_2(x):
 			return x + np.log(x-sum)
-		log_beta = map(element_add_2,log_beta)
+		self.log_beta = map(element_add_2,self.log_beta)
 
 	'''
 	before the actual variational inference 
@@ -181,6 +181,7 @@ class CTM:
 	def expect_mult_norm(self, lambda_v, nu_v, zeta_v):
 		sum_exp = np.sum(np.exp(lambda_v) + 0.5 * nu_v)
 		bound = (1.0 / zeta_v) * sum_exp - 1.0 + np.log(zeta_v)
+		return bound
 
 	def lhood_bnd(self):
 		topic_scores = np.zeros(self._K)
@@ -200,24 +201,23 @@ class CTM:
 			for j in range(self._K):
 				if phi_v[i,j] > 0: 
 					topic_scores[j] = phi_v[i,j] * (topic_scores[j] + self.cts[i]) 
-					lhood += self.cts[i] * phi_v[i,j] * (lambda_v[j] + log_beta[j,i] - log_phi_v[i,j])
+					lhood += self.cts[i] * phi_v[i,j] * (lambda_v[j] + self.log_beta[j,i] - log_phi_v[i,j])
 		lhood_v = lhood
+		return lhood_v
 
 	# optimize zeta
-	def opt_zeta(self):
+	def opt_zeta(lambda_v,nu_v):
 		zeta_v = 1.0
 		zeta_v += np.sum(np.exp(lambda_v + np.dot(0.5 ,nu_v)))
-		# for  i in range(self._K):
-		# 	zeta_v += np.exp(lambda_v[i] + (0.5) * nu_v[i])
+		return zeta_v
 
 	# optimize phi
-	def opt_phi(self):
+	def opt_phi(self, lambda_v,log_phi_v):
 		log_sum_n = 0
-
 		for n in range(self._W):
 			log_sum_n = 0
 			for i in range(self._K):
-				log_phi_v[n,i] =  lambda_v[i] + log_beta[i,n]
+				log_phi_v[n,i] =  lambda_v[i] + self.log_beta[i,n]
 				if i == 0:
 					log_sum_n = log_phi_v[n,i]
 				else:
@@ -226,6 +226,7 @@ class CTM:
 			for i in range(self._K):
 				log_phi_v[n,i] -= log_sum_n
 				phi_v[n,i] = np.exp(log_phi_v[n,i])
+		return (phi_v, log_phi_v)
 
 	# optimize lambda
 	def f_lambda(self):
@@ -259,60 +260,65 @@ class CTM:
 		# set return value (note negating derivative of bound)
 		df = np.zeros(self._K)
 		df -= np.subtract(np.subtract(temp[0], sum_phi),temp[3])
+		return df
 
-	def opt_lambda(self): 
+	def opt_lambda(self, phi_v, nu_v, zeta_v): 
 		sum_phi = np.zeros(self._K)
 		for i in range(self._W):
 			for j in range(self._K):
 				sum_phi[j] = self.wordcts[i] * phi_v[i,j]
 
 		lambda_v = fmin_cg(f_lambda,x0, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
+		return lambda_v
 
 	# optimize nu
-	def opt_nu(self):
+	def opt_nu(self, lambda_v, nu_v, zeta_v):
 		df = d2f = 0
-		nu = np.array([10 for i in range(self._K)])
-		log_nu = np.log(nu)
+		nu_v = np.dot(10,np.ones(self._K))
+		log_nu_v = np.log(nu_v)
 
 		for i in range(self._K):
 			while np.fabs(df) > 1e-10:
-				nu[i] =  np.exp(log_nu[i])
-				if math.isnan(nu[i]):
-					nu[i] = 20
-					log_nu[i] = np.log(nu[i])
-				df = - np.dot(0.5,inv_cov[i,i]) - np.dot((0.5 * self._W/zeta_v), np.exp(lambda_v[i] + nu[i]/2)) + (0.5 * (1.0 / nu[i]))
-				d2f = - np.dot((0.25 * (self._W/zeta_v)), np.exp(lambda_v[i] + nu[i]/2)) - (0.5 * (1.0 / nu[i] * nu[i]))
-				log_nu[i] = log_nu[i] - (df * nu[i])/(d2f * nu[i] * nu[i] + df * nu[i])
-		nu = np.exp(log_nu)
+				nu_v[i] =  np.exp(log_nu_v[i])
+				if math.isnan(nu_v[i]):
+					nu_v[i] = 20
+					log_nu_v[i] = np.log(nu[i]_v)
+				df = - np.dot(0.5,self.inv_cov[i,i]) - np.dot((0.5 * self._W/zeta_v), np.exp(lambda_v[i] + nu_v[i]/2)) + (0.5 * (1.0 / nu_v[i]))
+				d2f = - np.dot((0.25 * (self._W/zeta_v)), np.exp(lambda_v[i] + nu_v[i]/2)) - (0.5 * (1.0 / nu_v[i] * nu_v[i]))
+				log_nu_v[i] = log_nu_v[i] - (df * nu_v[i])/(d2f * nu_v[i] * nu_v[i] + df * nu_v[i])
+		nu_v = np.exp(log_nu_v)
 
-	# initial variational parameters
-	def init_var_para(self):
-		phi_v = np.array([[1.0/self._K for i in range(self._W)] for j in range(self._K)])
-		log_phi_v = np.array([[-(np.log(self._K)) for i in range(self._W)] for j in range(self._K)])
-		zeta_v = 0
-		nu_v = np.array([0 for i in range(self._K)])
-		lambda_v = np.array([0 for i in range(self._K)])
+		return nu_v
 
-		niter = 0
-		lhood_v = 0
+	'''
+	the actual variational inference process
+	'''	
 
 	# variational inference
 	def var_inference(self):
-		lhood_old = 0
-		convergence = 0
+		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
+		zeta_v = 0.0
+		nu_v = np.zeros(self._K)
+		lambda_v = np.zeros(self._K)
 
-		lhood_bnd(self)
+		niter = 0.0
+		lhood_v = 0.0
+		lhood_old = 0.0
+		convergence = 0.0
+
+		lhood_v = lhood_bnd(self)
 		while ((convergence > 1e-5) & (niter < 500)):
 			niter += 1
-			opt_zeta(self)
-			opt_lambda(self)
-			opt_zeta(self);
-			opt_nu(self);
-			opt_zeta(self);
-			opt_phi(self);
+			zeta_v = opt_zeta(lambda_v,nu_v)
+			lambda_v = opt_lambda(self, phi_v, nu_v, zeta_v)
+			zeta_v = opt_zeta(lambda_v,nu_v)
+			nu_v = opt_nu(self, lambda_v, nu_v, zeta_v);
+			zeta_v = opt_zeta(lambda_v,nu_v)
+			(phi_v, log_phi_v) = opt_phi(self, lambda_v,log_phi_v);
 
 			lhood_old = lhood_v
-			lhood_bnd(self)
+			lhood_v = lhood_bnd(self)
 
 			convergence = np.fabs((lhood_old - lhood_v)/lhood_old)
 
@@ -430,8 +436,8 @@ class CTM:
 		ret = 0
 		for i in range(self._W):
 			term_prob = 0
-			for k in range(len(log_beta)):
-				term_prob+=theta[k] * np.exp(log_beta[k,i])
+			for k in range(len(self.log_beta)):
+				term_prob+=theta[k] * np.exp(self.log_beta[k,i])
 			ret += np.log(term_prob) * count[i]
 		return ret
 
@@ -524,7 +530,7 @@ class CTM:
 			else:
 				sum_m = np.log(sum_m)
 			for j in range(self._W):
-				log_beta[i,j] = np.log(beta_ss[i,j] - sum_m)
+				self.log_beta[i,j] = np.log(beta_ss[i,j] - sum_m)
 
 	# load a model, and do approximate inference for each document in a corpus
 	def inference(self):
@@ -586,7 +592,7 @@ class CTM:
 			var_inference()
 			expected_theta()
 			#  approximate inference of held out data
-			l = log_mult_prob(heldout_doc, e_theta, log_beta)
+			l = log_mult_prob(heldout_doc, e_theta, self.log_beta)
 			log_lhood[i] = l
 			total_words += len(heldout_doc[0]) 
 			# TODO : make clear here  whether it is `heldout_doc[0] 
