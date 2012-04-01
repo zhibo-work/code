@@ -269,18 +269,6 @@ class CTM:
 		lambda_v = fmin_cg(f_lambda,x0, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 
 	# optimize nu
-	def df_nu(self,nu):
-		v = np.array([0.0 for i in range(self._K)])
-		for i in range(self._K):
-			v[i] = - np.dot(0.5,inv_cov[i,i]) - np.dot((0.5 * self._W/zeta_v), np.exp(lambda_v[i] + nu[i]/2)) + (0.5 * (1.0 / nu[i]))
-		return v
-
-	def d2f_nu(self,nu):
-		v = [0.0 for i in range(self._K)]
-		for i in range(self._K):
-			v[i] = - np.dot((0.25 * (self._W/zeta_v)), np.exp(lambda_v[i] + nu[i]/2)) - (0.5 * (1.0 / nu[i] * nu[i]))
-		return v
-
 	def opt_nu(self):
 		df = d2f = 0
 		nu = np.array([10 for i in range(self._K)])
@@ -288,8 +276,12 @@ class CTM:
 
 		for i in range(self._K):
 			while np.fabs(df) > 1e-10:
-				df = df_nu(nu[i])
-				d2f = d2f_nu(nu[i])
+				nu[i] =  np.exp(log_nu[i])
+				if math.isnan(nu[i]):
+					nu[i] = 20
+					log_nu[i] = np.log(nu[i])
+				df = - np.dot(0.5,inv_cov[i,i]) - np.dot((0.5 * self._W/zeta_v), np.exp(lambda_v[i] + nu[i]/2)) + (0.5 * (1.0 / nu[i]))
+				d2f = - np.dot((0.25 * (self._W/zeta_v)), np.exp(lambda_v[i] + nu[i]/2)) - (0.5 * (1.0 / nu[i] * nu[i]))
 				log_nu[i] = log_nu[i] - (df * nu[i])/(d2f * nu[i] * nu[i] + df * nu[i])
 		nu = np.exp(log_nu)
 
