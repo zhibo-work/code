@@ -346,17 +346,16 @@ class CTM:
 					cov_ss[i,j] = cov_ss[i,j] + nu_v[i] + lilj
 				else:
 					cov_ss[i,j] = cov_ss[i,j] + lilj
-				# topics suff stats
-				for i in range(self._W):
-					for j in range(self._K):
-						w = word[i] # d->word[i], is it the index of the i-th word?
-						c = count[i]
-						beta_ss[j,w] = beta_ss[j,w] + c * phi_v[i,j]
-				# number of data
-				ndata_ss += 1
+		# topics suff stats
+		for i in range(self._W):
+			for j in range(self._K):
+				w = word[i] # d->word[i], is it the index of the i-th word?
+				beta_ss[j,w] = beta_ss[j,w] + count[i] * phi_v[i,j]
+		# number of data
+		ndata_ss += 1
 
 	 # importance sampling the likelihood based on the variational posterior
-	def sample_term(self):
+	def sample_term(self,eta):
 		t1 = 0.5 * self.log_det_inv_cov
 		t1 += -(0.5) * self._K * 1.837877 # 1.837877 is the natural logarithm of 2*pi
 		for i in range(self._K):
@@ -364,11 +363,9 @@ class CTM:
 				t1 -= (0.5) * (eta[i] - self.mu[i]) * self.inv_cov[i,j] * (eta[j] - self.mu[j])
 		# compute theta
 		sum_t = 0 
-		for i in range(self._K):
-			theta[i] = np.exp(eta[i])
-			sum_t += theta[i]
-		for i in range(self._K):
-			theta[i] = theta[i] / sum_t
+		sum_t = np.sum(np.exp(eta))
+		theta = np.divide(theta, sum_t)
+
 		# compute word probabilities
 		for n in range(self._W):
 			word_term = 0
@@ -387,16 +384,15 @@ class CTM:
 		for n in range(self._W):
 			# sample eta from q(\eta)
 			for i in range(self._K): 
-				v = random.gauss(0, np.sqrt(nu[i]))
-				eta[i] = v + lambda_v[i]
+				eta[i] = random.gauss(0, np.sqrt(nu[i])) + lambda_v[i]
 			# compute p(w | \eta) - q(\eta)
-			log_prob = sample_term(self)
+			log_prob = sample_term(self,eta)
 			# update log sum
 			if n == 0:
 				sum_l = log_prob
 			else:
-				sum_l = log_sum(sum, log_prob)
-		sum_l = sum_l - np.log(nsamples)
+				sum_l = log_sum(sum_l, log_prob)
+		sum_l -= np.log(nsamples)
 		return sum_l
 
 	 # expected theta under a variational distribution
