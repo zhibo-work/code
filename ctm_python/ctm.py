@@ -395,47 +395,54 @@ class CTM:
 		sum_l -= np.log(nsamples)
 		return sum_l
 
-	 # expected theta under a variational distribution
-	 # (v is assumed allocated to the right length.)
-	def expected_theta(self):
+	def expected_theta(self, lambda_v, nu_v):
+		''' Return expected theta under a variational distribution
+		
+		Args:
+			self : use all the parameters initialized before
+			lambda_v : variational parameter lambda
+			nu_v : variational parameter nu
+
+		Returns:
+			val : the expected theta
+		'''
 		nsamples = 100
+		eta = np.zeros(self._K)
+		theta = np.zeros(self._K)
 		# initialize e_theta
-		e_theta = -1 * np.ones(self._K)
+		e_theta = -1.0 * np.ones(self._K)
 		# for each sample
 		for n in range(self._W):
 			# sample eta from q(\eta)
 			for i in range(self._K):
-				v = random.gauss(0, np.sqrt(nu[i]))
-				eta[i] = v + lambda_v[i]
+				eta[i] = random.gauss(0, np.sqrt(nu[i])) + lambda_v[i]
 			# compute p(w | \eta) - q(\eta)
-			w = sample_term(self)
+			w = sample_term(self, eta)
 			# compute theta
-			sum_t = 0
-			for i in range(self._K):
-				theta[i] = np.exp(eta[i])
-				sum_t += theta[i]
-			for i in range(self._K):
-				theta[i] = theta[i] / sum_t
+			sum_t = 0 
+			sum_t = np.sum(np.exp(eta))
+			theta = np.divide(theta, sum_t)
+
 			# update e_theta
 			for i in range(self._K):
 				e_theta[i] = log_sum(e_theta[i], w+np.log(theta[i]))
 		# normalize e_theta and set return vector
-		sum_et = -1
+		sum_et = -1.0
 		for i in range(self._K):
 			e_theta[i] -= np.log(nsamples)
 			sum_et = log_sum(sum_et, e_theta[i])
-		for i in range(self._K):
-			val[i] = np.exp(e_theta[i] - sum_et)
+		val = np.exp(np.subtract(e_theta, sum_et))
+		return val
 
 	 # log probability of the document under proportions theta and topics beta
-	def log_mult_prob(self):
-		ret = 0
+	def log_mult_prob(self, doc.count, e_theta):
+		val = 0
 		for i in range(self._W):
 			term_prob = 0
 			for k in range(len(self.log_beta)):
-				term_prob+=theta[k] * np.exp(self.log_beta[k,i])
-			ret += np.log(term_prob) * count[i]
-		return ret
+				term_prob += e_theta[k] * np.exp(self.log_beta[k,i])
+			val += np.log(term_prob) * count[i]
+		return val
 
 	'''
 	estimate stage
@@ -563,12 +570,19 @@ class CTM:
 
 	
 	def pod_experiment(self, docs, proportions = 0.5):
-		'''
+		''' Calculate perplexity value 
+
 		read in corpus ,and split it into observed data and held-out data
 		 ` proportions` indicates the ratio of the split
 
 		for each partially observed document: (a) perform inference on the
 		 observations (b) take expected theta and compute likelihood
+
+		 Args:
+		 	docs : the corpus
+		 	proportions : the split ratio, 0.5 as initial value, can be assigned manually
+		 Returns:
+		 	perplexity : currently, the only evaluation value, add others later
 
 		'''
 		permute_docs = np.random.permutation(docs)
@@ -576,8 +590,11 @@ class CTM:
 		obs_docs = permute_docs[:split_point]
 		heldout_docs = permute_docs[split_point:]
 
+		
 		log_lhood = np.zeros(self._D)
 		e_theta = np.zeros(self._K)
+
+
 		for i in range(len(obs_docs)):
 			# get observed and heldout documents
 			obs_doc = obs_docs[i]
@@ -586,9 +603,9 @@ class CTM:
 			# initial variational parameters
 			init_var_para()
 			var_inference()
-			expected_theta()
+			expected_theta(self, lambda_v, nu_v)
 			#  approximate inference of held out data
-			l = log_mult_prob(heldout_doc, e_theta, self.log_beta)
+			l = log_mult_prob(self, heldout_doc, e_theta)
 			log_lhood[i] = l
 			total_words += len(heldout_doc[0]) 
 			# TODO : make clear here  whether it is `heldout_doc[0] 
