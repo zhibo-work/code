@@ -176,9 +176,11 @@ class CTM:
 	* nu_v
 	'''
 
-	# the next function correspond to eq.7 in ctm paper, which
-	# is the upper bound
 	def expect_mult_norm(self, lambda_v, nu_v, zeta_v):
+		'''
+		Equation 7 in paper, calculate the upper bound
+
+		'''
 		sum_exp = np.sum(np.exp(lambda_v) + 0.5 * nu_v)
 		bound = (1.0 / zeta_v) * sum_exp - 1.0 + np.log(zeta_v)
 		return bound
@@ -205,14 +207,14 @@ class CTM:
 		lhood_v = lhood
 		return lhood_v
 
-	# optimize zeta
 	def opt_zeta(lambda_v,nu_v):
+		# optimize zeta
 		zeta_v = 1.0
 		zeta_v += np.sum(np.exp(lambda_v + np.dot(0.5 ,nu_v)))
 		return zeta_v
 
-	# optimize phi
 	def opt_phi(self, lambda_v,log_phi_v):
+		# optimize phi
 		log_sum_n = 0
 		for n in range(self._W):
 			log_sum_n = 0
@@ -228,7 +230,7 @@ class CTM:
 				phi_v[n,i] = np.exp(log_phi_v[n,i])
 		return (phi_v, log_phi_v)
 
-	# optimize lambda
+	# next three functions to optimize lambda
 	def f_lambda(self):
 		temp = np.zeros((4,self._K))
 		# temp = [[0 for i in range(self._K)] for j in range(4)]
@@ -271,8 +273,8 @@ class CTM:
 		lambda_v = fmin_cg(f_lambda,x0, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 		return lambda_v
 
-	# optimize nu
 	def opt_nu(self, lambda_v, nu_v, zeta_v):
+		# optimize nu
 		df = d2f = 0
 		nu_v = np.dot(10,np.ones(self._K))
 		log_nu_v = np.log(nu_v)
@@ -295,13 +297,8 @@ class CTM:
 	'''
 
 	# variational inference
-	def var_inference(self, ):
-		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
-		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
-		zeta_v = 0.0
-		nu_v = np.zeros(self._K)
-		lambda_v = np.zeros(self._K)
-
+	def var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v):
+		
 		niter = 0.0
 		lhood_v = 0.0
 		lhood_old = 0.0
@@ -329,7 +326,7 @@ class CTM:
 			converged_v = 0
 		else:
 			converged_v = 1
-		return lhood_v
+		return (lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
 
 	def update_expected_ss(self, lambda_v, nu_v, phi_v, ids, cts):
 		'''
@@ -400,21 +397,6 @@ class CTM:
 			# pdf of lognorm dist. parameters are (x, scale(mu), loc, shape(sigma))
 		return(t1-t2)
 
-	 # def sample_lhood(self):
-		# # for each sample
-		# for n in range(self._W):
-		# 	# sample eta from q(\eta)
-		# 	for i in range(self._K):
-		# 		eta[i] = random.gauss(0, np.sqrt(nu[i])) + lambda_v[i]
-		# 	# compute p(w | \eta) - q(\eta)
-		# 	log_prob = sample_term(self,eta, lambda_v, nu_v)
-		# 	# update log sum
-		# 	if n == 0:
-		# 		sum_l = log_prob
-		# 	else:
-		# 		sum_l = log_sum(sum_l, log_prob)
-		# sum_l -= np.log(nsamples)
-		# return sum_l
 
 	def expected_theta(self, lambda_v, nu_v):
 		''' Return expected theta under a variational distribution
@@ -455,8 +437,8 @@ class CTM:
 		e_theta = np.exp(np.subtract(e_theta, sum_et))
 		return e_theta
 
-	 # log probability of the document under proportions theta and topics beta
-	def log_mult_prob(self, doc.count, e_theta):
+	def log_mult_prob(self, cts, e_theta):
+		# log probability of the document under proportions theta and topics beta
 		val = 0
 		for i in range(self._W):
 			term_prob = 0
@@ -468,10 +450,11 @@ class CTM:
 	'''
 	estimate stage
 	'''
-	# the main function
 	def em(self):
+		# the main function
 		iteration = 0
-		convergence = lhood = lhood_old = 1.0
+		convergence = 1.0
+		lhood = lhood_old =  0.0
 		avg_niter = converged_pct = old_conv = 0.0
 		reset_var = 1
 		var_max_iter = 500
@@ -482,12 +465,10 @@ class CTM:
 		corpus_phi_sum = np.zeros((self._D,self._K))
 
 		while ((iteration < 1000) and ((convergence > 1e-3) or (convergence < 0))):
-			expectation(self)
-			lhood_new  = lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
-			convergence = (lhood_old - lhood_new) / lhood_old
-			if (((iteration % 1) == 0) or math.isnan(lhood)):
-				pass
-				# write a bunch of data: iteration lambda nu
+			# e-step
+			(lhood, mu_ss, cov_ss, beta_ss, ndata_ss) = expectation(self, docs)
+			#lhood_new  = lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
+			convergence = (lhood_old - lhood) / lhood_old
 
 			if convergence < 0:
 				reset_var = 0
@@ -496,34 +477,40 @@ class CTM:
 				else:
 					var_max_iter = var_max_iter / 10
 			else:
-				maximization(self)
+				maximization(self，mu_ss, cov_ss, beta_ss, ndata_ss)
 				lhood_old = lhood
 				reset_var = 1
 				iteration += 1
 			old_conv = convergence
-			# reset all the sufficient statistics, is this necessary?
 
-	# e-step
-	def  expectation(self, docs, phi_v, lambda_v, nu_v):
+	def expectation(self, docs):
 		''' E-step of EM algorithm
 		Arguments:
 			corpus: the docs needed to be worked on, need to get ids and cts
 		Returns:
-			sufficient statistics : mu_ss, cov_ss, beta_ss, ndata_ss
+			sufficient statistics : lhood, mu_ss, cov_ss, beta_ss, ndata_ss
 		'''
 		avg_niter = 0.0
-		converged_pct = 0
-		total = 0
+		converged_pct = 0.0
+		total = 0.0
 
 		phi_sum = np.zeros(self._K)
 
-    		(wordids, wordcts) = parse_doc_list(docs, self._vocab)
-   	 	ndocs = len(docs)		# number of docs in this corpus 
+		(wordids, wordcts) = parse_doc_list(docs, self._vocab)
+		ndocs = len(docs)		# number of docs in this corpus 
 
 		for i in range(ndocs):
 			ids = self.wordids[i]
-           		cts = self.wordcts[i]
-           		lhood = var_inference(self)
+			cts = self.wordcts[i]
+
+			# initialize the variational parameters
+			phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+			log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
+			zeta_v = 0.0
+			nu_v = np.zeros(self._K)
+			lambda_v = np.zeros(self._K)
+
+			(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
 			(mu_ss, cov_ss, beta_ss, ndata_ss) = update_expected_ss(self, lambda_v, nu_v, phi_v, ids, cts)
 			total += lhood
 			avg_niter = niter_v
@@ -537,13 +524,20 @@ class CTM:
 		avg_niter avg_niter / self._D
 		converged_pct = converged_pct / self._D
 		total_lhood = total
-		return (mu_ss, cov_ss, beta_ss, ndata_ss)
+		return (total_lhood, mu_ss, cov_ss, beta_ss, ndata_ss)
 
 	# m-step
-	def maximization(self):
+	def maximization(self，mu_ss, cov_ss, beta_ss, ndata_ss):
+		'''
+		M-step of EM algorithm, use scikit.learn's LedoitWolf method to perfom 
+		covariance matrix shrinkage. 
+		Arguments:
+			sufficient statistics, i.e. model parameters
+		Returns:
+			bound
+		'''
 		# mean maximization
-		for i in range(self._K):
-			mu[i] = mu_ss[i] / ndata_ss
+		mu = np.divide(mu_ss, ndata_ss)
 		# covariance maximization
 		for i in range(self._K):
 			for j in range(self._K):
@@ -566,6 +560,7 @@ class CTM:
 				sum_m = np.log(sum_m)
 			for j in range(self._W):
 				self.log_beta[i,j] = np.log(beta_ss[i,j] - sum_m)
+		return  
 
 	# load a model, and do approximate inference for each document in a corpus
 	def inference(self):
@@ -581,13 +576,18 @@ class CTM:
 			cts_doc = self.cts[i]
 			temp_sum = 0
 
-			# figure out how to pass the parameters
-			lhood[i] = var_inference(self)
-			lambda_corpus[i] = lambda_v
-			nu_corpus[i] = nu_v
-			for j in range(self._K):
-				for n in range(self._W):
-					phi_sums_corpus[i,j] += phi_v[n,j]
+		# initialize the variational parameters
+				phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
+		zeta_v = 0.0
+		nu_v = np.zeros(self._K)
+		lambda_v = np.zeros(self._K)
+
+		(lhood[i],phi_v, log_phi_v, lambda_corpus[i], nu_corpus[i], zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+
+		for j in range(self._K):
+			for n in range(self._W):
+				phi_sums_corpus[i,j] += phi_v[n,j]
 
 		# output likelihood and some variational parameters
 		# write them to files
@@ -611,10 +611,10 @@ class CTM:
 		 observations (b) take expected theta and compute likelihood
 
 		 Args:
-		 	docs : the corpus
-		 	proportions : the split ratio, 0.5 as initial value, can be assigned manually
+			docs : the corpus
+			proportions : the split ratio, 0.5 as initial value, can be assigned manually
 		 Returns:
-		 	perplexity : currently, the only evaluation value, add others later
+			perplexity : currently, the only evaluation value, add others later
 
 		'''
 		permute_docs = np.random.permutation(docs)
@@ -632,12 +632,19 @@ class CTM:
 			obs_doc = obs_docs[i]
 			heldout_doc = heldout_docs[i]
 			#  compute variational distribution
-			# initial variational parameters
-			init_var_para()
-			var_inference()
-			e_theta = expected_theta(self, lambda_v, nu_v)
+			
+		# initialize the variational parameters
+				phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
+		zeta_v = 0.0
+		nu_v = np.zeros(self._K)
+		lambda_v = np.zeros(self._K)
+
+		(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+		e_theta = expected_theta(self, lambda_v, nu_v)
+		for j in range(len(heldout_docs)):
 			#  approximate inference of held out data
-			l = log_mult_prob(self, heldout_doc, e_theta)
+			l = log_mult_prob(self, cts, e_theta)
 			log_lhood[i] = l
 			total_words += len(heldout_doc[0])
 			# TODO : make clear here  whether it is `heldout_doc[0]
