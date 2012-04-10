@@ -145,10 +145,13 @@ class CTM:
 		self.inv_cov = np.linalg.inv(self.cov)
 		self.log_det_inv_cov = np.log(np.linalg.det(self.inv_cov))
 
+		self.ndata = 0 # cumulate count of number of docs processed
+
 		# initialize topic distribution, i.e. self.log_beta
 		seed = 1115574245
 		sum = 0
-		self.log_beta = np.zeros([self._K,self._W])
+		self.beta = np.zeros([self._K,self._W])
+		self.log_beta = np.zeros([self._K,self._W]) # log 0 is inf, so just to make it 0
 
 		# little function to perform element summation
 		def element_add_1(x):
@@ -176,37 +179,6 @@ class CTM:
 	* nu_v
 	'''
 
-	def expect_mult_norm(self, lambda_v, nu_v, zeta_v):
-		'''
-		Equation 7 in paper, calculate the upper bound
-
-		'''
-		sum_exp = np.sum(np.exp(lambda_v) + 0.5 * nu_v)
-		bound = (1.0 / zeta_v) * sum_exp - 1.0 + np.log(zeta_v)
-		return bound
-
-	def lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v):
-		topic_scores = np.zeros(self._K)
-
-		# E[log p(\eta | \mu, \Sigma)] + H(q(\eta | \lambda, \nu)
-		lhood = (0.5) * self.log_det_inv_cov + 0.5 * self._K
-		for i in range(self._K):
-			v = - (0.5) * nu_v[i] * self.inv_cov[i,i]
-			for j in range(self._K):
-				v -= (0.5) * (lambda_v[i] - self.mu[i]) * self.inv_cov[i,j] * (lambda_v[j] - self.mu[j])
-			v += (0.5) * np.log(nu_v[i])
-			lhood += v
-
-		# E[log p(z_n | \eta)] + E[log p(w_n | \beta)] + H(q(z_n | \phi_n))
-		lhood -= expect_mult_norm(lambda_v, nu_v, zeta_v) * self._D
-		for i in range(self._W):
-			for j in range(self._K):
-				if phi_v[i,j] > 0:
-					topic_scores[j] = phi_v[i,j] * (topic_scores[j] + self.cts[i])
-					lhood += self.cts[i] * phi_v[i,j] * (lambda_v[j] + self.log_beta[j,i] - log_phi_v[i,j])
-		lhood_v = lhood
-		return lhood_v
-
 	def opt_zeta(lambda_v,nu_v):
 		# optimize zeta
 		zeta_v = 1.0
@@ -231,7 +203,7 @@ class CTM:
 		return (phi_v, log_phi_v)
 
 	# next three functions to optimize lambda
-	def f_lambda(self):
+	def f_lambda(self, sum_phi, phi_v, lambda_v, nu_v, zeta_v):
 		temp = np.zeros((4,self._K))
 		# temp = [[0 for i in range(self._K)] for j in range(4)]
 		term1 = term2 = term3 = 0
@@ -249,7 +221,7 @@ class CTM:
 		term3 = -(np.add(np.subtract(np.dot((1.0/zeta_v), term3), 1.0), np.log(zeta_v))) * self._W
 		return -(term1 + term2 + term3)
 
-	def df_lambda(self):
+	def df_lambda(self, sum_phi, lambda_v, nu_v, zeta_v):
 		# compute \Sigma^{-1} (\mu - \lambda)
 		temp[0] = np.zeros(self._K)
 		temp[1] = np.subtract(self.mu - lambda_v)
@@ -273,7 +245,7 @@ class CTM:
 		lambda_v = fmin_cg(f_lambda,x0, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 		return lambda_v
 
-	def opt_nu(self, lambda_v, nu_v, zeta_v):
+	def opt_nu(self, lambda_v, zeta_v):
 		# optimize nu
 		df = d2f = 0
 		nu_v = np.dot(10,np.ones(self._K))
@@ -294,7 +266,45 @@ class CTM:
 
 	'''
 	the actual variational inference process
+
 	'''
+
+	def lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v):
+		''' compute the likelihood bound give the variational parameters
+
+		Arguments:
+			variational parameters
+
+		Returns:
+			likelihood bound
+
+		'''
+		topic_scores = np.zeros(self._K)
+
+		# E[log p(\eta | \mu, \Sigma)] + H(q(\eta | \lambda, \nu)
+		lhood = (0.5) * self.log_det_inv_cov + 0.5 * self._K
+		for i in range(self._K):
+			v = - (0.5) * nu_v[i] * self.inv_cov[i,i]
+			for j in range(self._K):
+				v -= (0.5) * (lambda_v[i] - self.mu[i]) * self.inv_cov[i,j] * (lambda_v[j] - self.mu[j])
+			v += (0.5) * np.log(nu_v[i])
+			lhood += v
+
+		# E[log p(z_n | \eta)] + E[log p(w_n | \beta)] + H(q(z_n | \phi_n))
+
+		# Equation 7 in paper, calculate the upper bound
+		sum_exp = np.sum(np.exp(lambda_v) + 0.5 * nu_v)
+		bound = (1.0 / zeta_v) * sum_exp - 1.0 + np.log(zeta_v)
+
+		lhood -= bound * self._D
+
+		for i in range(self._W):
+			for j in range(self._K):
+				if phi_v[i,j] > 0:
+					topic_scores[j] = phi_v[i,j] * (topic_scores[j] + self.cts[i])
+					lhood += self.cts[i] * phi_v[i,j] * (lambda_v[j] + self.log_beta[j,i] - log_phi_v[i,j])
+		lhood_v = lhood
+		return lhood_v
 
 	# variational inference
 	def var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v):
@@ -310,7 +320,7 @@ class CTM:
 			zeta_v = opt_zeta(lambda_v,nu_v)
 			lambda_v = opt_lambda(self, phi_v, nu_v, zeta_v)
 			zeta_v = opt_zeta(lambda_v,nu_v)
-			nu_v = opt_nu(self, lambda_v, nu_v, zeta_v);
+			nu_v = opt_nu(self, lambda_v, zeta_v);
 			zeta_v = opt_zeta(lambda_v,nu_v)
 			(phi_v, log_phi_v) = opt_phi(self, lambda_v,log_phi_v);
 
@@ -335,34 +345,28 @@ class CTM:
 		Returns:
 			sufficient statistics
 		'''
-		# init
-		mu_ss    = np.zeros(self._K)
-		cov_ss   = np.zeros((self._K, self._K))
-		beta_ss  = np.zeros((self._K, self._W))
-		ndata_ss = 0
 
 		ids = ids
 		cts = cts
 
 		# covariance and mean suff stats
 		for i in range(self._K):
-			mu_ss[i] = lambda_v[i]
+			self.mu[i] = lambda_v[i]
 			for j in range(self._K):
 				lilj = lambda_v[i] * lambda_v[j]
 				if i == j:
-					cov_ss[i,j] = cov_ss[i,j] + nu_v[i] + lilj
+					self.cov[i,j] = self.cov[i,j] + nu_v[i] + lilj
 				else:
-					cov_ss[i,j] = cov_ss[i,j] + lilj
+					self.cov[i,j] = self.cov[i,j] + lilj
 		# topics suff stats
 		for i in range(self._W):
 			for j in range(self._K):
 				w = ids[i] # d->word[i], is it the index of the i-th word?
-				beta_ss[j,w] = beta_ss[j,w] + cts[i] * phi_v[i,j]
+				self.beta[j,w] = self.beta[j,w] + cts[i] * phi_v[i,j]
 		# number of data
-		ndata_ss += 1
-		return (mu_ss, cov_ss, beta_ss, ndata_ss)
+		self.ndata += 1
 
-	def sample_term(self,eta, lambda_v, nu_v):
+	def sample_term(self, eta, lambda_v, nu_v):
 		'''
 		importance sampling the likelihood based on the variational posterior
 		
@@ -444,7 +448,7 @@ class CTM:
 			term_prob = 0
 			for k in range(len(self.log_beta)):
 				term_prob += e_theta[k] * np.exp(self.log_beta[k,i])
-			val += np.log(term_prob) * count[i]
+			val += np.log(term_prob) * cts[i]
 		return val
 
 	'''
@@ -466,10 +470,10 @@ class CTM:
 
 		while ((iteration < 1000) and ((convergence > 1e-3) or (convergence < 0))):
 			# e-step
-			(lhood, mu_ss, cov_ss, beta_ss, ndata_ss) = expectation(self, docs)
-			#lhood_new  = lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
+			lhood= expectation(self, docs)
 			convergence = (lhood_old - lhood) / lhood_old
 
+			# m-step
 			if convergence < 0:
 				reset_var = 0
 				if var_max_iter > 0:
@@ -477,7 +481,7 @@ class CTM:
 				else:
 					var_max_iter = var_max_iter / 10
 			else:
-				maximization(self，mu_ss, cov_ss, beta_ss, ndata_ss)
+				maximization(self)
 				lhood_old = lhood
 				reset_var = 1
 				iteration += 1
@@ -488,7 +492,7 @@ class CTM:
 		Arguments:
 			corpus: the docs needed to be worked on, need to get ids and cts
 		Returns:
-			sufficient statistics : lhood, mu_ss, cov_ss, beta_ss, ndata_ss
+			sufficient statistics : lhood, self.mu, self.cov, self.beta, self.ndata
 		'''
 		avg_niter = 0.0
 		converged_pct = 0.0
@@ -511,7 +515,7 @@ class CTM:
 			lambda_v = np.zeros(self._K)
 
 			(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
-			(mu_ss, cov_ss, beta_ss, ndata_ss) = update_expected_ss(self, lambda_v, nu_v, phi_v, ids, cts)
+			update_expected_ss(self, lambda_v, nu_v, phi_v, ids, cts)
 			total += lhood
 			avg_niter = niter_v
 			converged_pct = converged_v
@@ -524,46 +528,51 @@ class CTM:
 		avg_niter avg_niter / self._D
 		converged_pct = converged_pct / self._D
 		total_lhood = total
-		return (total_lhood, mu_ss, cov_ss, beta_ss, ndata_ss)
+		return total_lhood
 
 	# m-step
-	def maximization(self，mu_ss, cov_ss, beta_ss, ndata_ss):
+	def maximization(self):
 		'''
 		M-step of EM algorithm, use scikit.learn's LedoitWolf method to perfom 
 		covariance matrix shrinkage. 
 		Arguments:
 			sufficient statistics, i.e. model parameters
 		Returns:
-			bound
+			the updated sufficient statistics which all in self definition, so no 
+			return values
 		'''
 		# mean maximization
-		mu = np.divide(mu_ss, ndata_ss)
+		mu = np.divide(self.mu, self.ndata)
 		# covariance maximization
 		for i in range(self._K):
 			for j in range(self._K):
-				cov[i,j] = (1.0/ ndata_ss) * cov_ss[i,j] + ndata_ss * mu[i] * mu[j] - mu_ss[i] * mu[j] - mu_ss[j] * mu[i]
+				cov[i,j] = (1.0/ self.ndata) * self.cov[i,j] + self.ndata * mu[i] * mu[j] - self.mu[i] * mu[j] - self.mu[j] * mu[i]
 		# covariance shrinkage
 		lw = LedoitWolf()
 		cov_result = lw.fit(cov,assume_centered=True).covariance_
-		inv_cov = np.linalg.inv(cov_result)
-		log_det_inv_cov = np.log(np.linalg.det(inv_cov))
+		self.inv_cov = np.linalg.inv(cov_result)
+		self.log_det_inv_cov = np.log(np.linalg.det(self.inv_cov))
 
 		# topic maximization
 		for i in range(self._K):
 			sum_m = 0
 			for j in range(self._W):
-				sum_m += beta_ss[i,j]
+				sum_m += self.beta[i,j]
 
 			if sum_m == 0:
 				sum_m = -1000 * self._W
 			else:
 				sum_m = np.log(sum_m)
 			for j in range(self._W):
-				self.log_beta[i,j] = np.log(beta_ss[i,j] - sum_m)
-		return  
+				self.log_beta[i,j] = np.log(self.beta[i,j] - sum_m)
 
-	# load a model, and do approximate inference for each document in a corpus
 	def inference(self):
+		''' Perform inference on corpus (seen or unseen)
+		load a model, and do approximate inference for each document in a corpus
+		'''
+
+		# read in the model parameters first
+
 		# corpus level parameter initialization
 		lhood_corpus = np.zeros(self._D)
 		nu_corpus = np.zeros((self._D, self._K))
@@ -577,7 +586,7 @@ class CTM:
 			temp_sum = 0
 
 		# initialize the variational parameters
-				phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
 		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
 		zeta_v = 0.0
 		nu_v = np.zeros(self._K)
@@ -634,7 +643,7 @@ class CTM:
 			#  compute variational distribution
 			
 		# initialize the variational parameters
-				phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
 		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
 		zeta_v = 0.0
 		nu_v = np.zeros(self._K)
@@ -651,6 +660,7 @@ class CTM:
 			# or `heldout_doc`
 			total_lhood += l
 		perplexity = np.exp(- total_lhood / total_words)
+		print 'the perplexity is:', perplexity
 
 
 
