@@ -204,36 +204,37 @@ class CTM:
 
 	# next three functions to optimize lambda
 	def f_lambda(self, sum_phi, phi_v, lambda_v, nu_v, zeta_v):
-		temp = np.zeros((4,self._K))
+		temp1 = np.zeros(self._K)
 		# temp = [[0 for i in range(self._K)] for j in range(4)]
 		term1 = term2 = term3 = 0
 
 		# compute lambda^T * \sum phi
 		term1 = np.dot(lambda_v * sum_phi)
 		# compute lambda - mu (= temp1)
-		temp[1] += np.subtract(lambda_v, self.mu)
+		temp1 += np.subtract(lambda_v, self.mu)
 		# compute (lambda - mu)^T Sigma^-1 (lambda - mu)
 		term2 = (-0.5) * temp[1] * self.inv_cov * temp[1]
 		# last term
 		for i in range(self._K):
 			term3 += np.exp(lambda_v[i] + 0.5 * nu_v[i])
 		# need to figure out how term3 is calculated
-		term3 = -(np.add(np.subtract(np.dot((1.0/zeta_v), term3), 1.0), np.log(zeta_v))) * self._W
-		return -(term1 + term2 + term3)
+		term3 =  -((1.0/zeta_v) * term3 - 1.0 + np.log(zeta_v)) * self._K
+		return (-(term1 + term2 + term3))
 
 	def df_lambda(self, sum_phi, lambda_v, nu_v, zeta_v):
 		# compute \Sigma^{-1} (\mu - \lambda)
-		temp[0] = np.zeros(self._K)
-		temp[1] = np.subtract(self.mu - lambda_v)
-		temp[0] = self.inv_cov * temp[1]
+		temp0= np.zeros(self._K)
+		temp1 = np.subtract(self.mu - lambda_v)
+		temp0= self.inv_cov * temp1
+		temp3 =  np.zeros(self._K)
 
 		#  compute - (N / \zeta) * exp(\lambda + \nu^2 / 2)
 		for i in range(self._K):
-			temp[3][i] = np.dot((self._D / zeta_v), np.exp(lambda_v[i] + np.dot(0.5, nu_v[i])))
+			temp3[i] = np.dot((self._D / zeta_v), np.exp(lambda_v[i] + np.dot(0.5, nu_v[i])))
 
 		# set return value (note negating derivative of bound)
 		df = np.zeros(self._K)
-		df -= np.subtract(np.subtract(temp[0], sum_phi),temp[3])
+		df -= np.subtract(np.subtract(temp0, sum_phi),temp3)
 		return df
 
 	def opt_lambda(self, phi_v, nu_v, zeta_v):
@@ -242,7 +243,7 @@ class CTM:
 			for j in range(self._K):
 				sum_phi[j] = self.wordcts[i] * phi_v[i,j]
 
-		lambda_v = fmin_cg(f_lambda,x0, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
+		lambda_v = fmin_cg(f_lambda, lambda_v, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 		return lambda_v
 
 	def opt_nu(self, lambda_v, zeta_v):
@@ -455,6 +456,21 @@ class CTM:
 	estimate stage
 	'''
 	def em(self):
+
+		# load model parameters
+		# load gaussian
+		with open('ctm_nu','rb') as ctm_nu_dump:
+			self.nu = cPickle.load(ctm_nu_dump)
+		with open('ctm_cov','rb') as ctm_cov_dump:
+			self.cov = cPickle.load(ctm_cov_dump)
+		with open('ctm_inv_cov','rb') as ctm_inv_cov_dump:
+			self.inv_cov = cPickle.load(ctm_inv_cov_dump)
+		with open('ctm_log_det_inv_cov','rb') as ctm_log_det_inv_cov_dump:
+			self.log_det_inv_cov = cPickle.load(ctm_log_det_inv_cov_dump)
+		# load topic matrix 
+		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
+			self.log_beta = cPickle.load(log_beta_dump)
+
 		# the main function
 		iteration = 0
 		convergence = 1.0
@@ -566,12 +582,38 @@ class CTM:
 			for j in range(self._W):
 				self.log_beta[i,j] = np.log(self.beta[i,j] - sum_m)
 
+		# write model parameters to file
+		# write gaussian
+		with open('ctm_nu','w') as ctm_nu_dump:
+			cPickle.dump(self.nu,ctm_nu_dump)
+		with open('ctm_cov','w') as ctm_cov_dump:
+			cPickle.dump(self.cov,ctm_cov_dump)
+		with open('ctm_inv_cov','w') as ctm_inv_cov_dump:
+			cPickle.dump(self.inv_cov, ctm_inv_cov_dump)
+		with open('ctm_log_det_inv_cov','w') as ctm_log_det_inv_cov_dump:
+			cPickle.dump(self.log_det_inv_cov,ctm_log_det_inv_cov_dump)
+		# write topic matrix 
+		with open('ctm_log_beta','w') as ctm_log_beta_dump:
+			cPickle.dump(self.log_beta,log_beta_dump)
+
+
 	def inference(self):
 		''' Perform inference on corpus (seen or unseen)
 		load a model, and do approximate inference for each document in a corpus
 		'''
-
-		# read in the model parameters first
+		# load model parameters
+		# load gaussian
+		with open('ctm_nu','rb') as ctm_nu_dump:
+			self.nu = cPickle.load(ctm_nu_dump)
+		with open('ctm_cov','rb') as ctm_cov_dump:
+			self.cov = cPickle.load(ctm_cov_dump)
+		with open('ctm_inv_cov','rb') as ctm_inv_cov_dump:
+			self.inv_cov = cPickle.load(ctm_inv_cov_dump)
+		with open('ctm_log_det_inv_cov','rb') as ctm_log_det_inv_cov_dump:
+			self.log_det_inv_cov = cPickle.load(ctm_log_det_inv_cov_dump)
+		# load topic matrix 
+		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
+			self.log_beta = cPickle.load(log_beta_dump)
 
 		# corpus level parameter initialization
 		lhood_corpus = np.zeros(self._D)
@@ -602,7 +644,7 @@ class CTM:
 		# write them to files
 		with open('ctm_lhood','w') as ctm_lhood_dump:
 			cPickle.dump(lhood,ctm_looh_dump)
-		with open('corpus_lambda','w') as corpus_lambda-dump:
+		with open('corpus_lambda','w') as corpus_lambda_dump:
 			cPickle.dump(corpus_lambda,corpus_lambda_dump)
 		with open('corpus_nu','w') as corpus_nu_dump:
 			cPickle.dump(corpus_nu, corpus_nu_dump)
@@ -613,7 +655,7 @@ class CTM:
 	def pod_experiment(self, docs, proportions = 0.5):
 		''' Calculate perplexity value
 
-		read in corpus ,and split it into observed data and held-out data
+		read in corpus, and split it into observed data and held-out data
 		 ` proportions` indicates the ratio of the split
 
 		for each partially observed document: (a) perform inference on the
@@ -631,17 +673,33 @@ class CTM:
 		obs_docs = permute_docs[:split_point]
 		heldout_docs = permute_docs[split_point:]
 
+		# load model parameters
+		# load gaussian
+		with open('ctm_nu','rb') as ctm_nu_dump:
+			self.nu = cPickle.load(ctm_nu_dump)
+		with open('ctm_cov','rb') as ctm_cov_dump:
+			self.cov = cPickle.load(ctm_cov_dump)
+		with open('ctm_inv_cov','rb') as ctm_inv_cov_dump:
+			self.inv_cov = cPickle.load(ctm_inv_cov_dump)
+		with open('ctm_log_det_inv_cov','rb') as ctm_log_det_inv_cov_dump:
+			self.log_det_inv_cov = cPickle.load(ctm_log_det_inv_cov_dump)
+		# load topic matrix 
+		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
+			self.log_beta = cPickle.load(log_beta_dump)
 
 		log_lhood = np.zeros(self._D)
 		e_theta = np.zeros(self._K)
 
-
+		# for the sake of simplicity, proportion between 
+		# observed doc and held-out doc are set to 0.5, no other value
 		for i in range(len(obs_docs)):
 			# get observed and heldout documents
 			obs_doc = obs_docs[i]
 			heldout_doc = heldout_docs[i]
 			#  compute variational distribution
 			
+		# read in the model parameter learnt by training process
+
 		# initialize the variational parameters
 		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
 		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
