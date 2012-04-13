@@ -104,16 +104,16 @@ class CTM:
 
 	"""
 	def __init__(self, vocab, K, D, mu, cov):
-	''' initialization
-
-	Arguments:
-		K: Number of topics
-		vocab: A set of words to recognize. When analyzing documents, any word not in this set will be ignored.
-		D: Total number of documents in the population. For a fixed corpus,
-		   this is the size of the corpus.
-
-		mu and cov: the hyperparameters logistic normal distribution for prior on weight vectors theta
 		'''
+		Arguments:
+			K: Number of topics
+			vocab: A set of words to recognize. When analyzing documents, any word not in this set will be ignored.
+			D: Total number of documents in the population. For a fixed corpus,
+			   this is the size of the corpus.
+
+			mu and cov: the hyperparameters logistic normal distribution for prior on weight vectors theta
+		'''
+
 		self._vocab = dict()
 		for word in vocab:
 			word = word.lower()
@@ -223,9 +223,7 @@ class CTM:
 
 	def df_lambda(self, sum_phi, lambda_v, nu_v, zeta_v):
 		# compute \Sigma^{-1} (\mu - \lambda)
-		temp0= np.zeros(self._K)
-		temp1 = np.subtract(self.mu - lambda_v)
-		temp0= self.inv_cov * temp1
+		temp0= self.inv_cov * np.subtract(self.mu - lambda_v)
 		temp3 =  np.zeros(self._K)
 
 		#  compute - (N / \zeta) * exp(\lambda + \nu^2 / 2)
@@ -257,7 +255,7 @@ class CTM:
 				nu_v[i] =  np.exp(log_nu_v[i])
 				if math.isnan(nu_v[i]):
 					nu_v[i] = 20
-					log_nu_v[i] = np.log(nu[i]_v)
+					log_nu_v[i] = np.log(nu_v[i])
 				df = - np.dot(0.5,self.inv_cov[i,i]) - np.dot((0.5 * self._W/zeta_v), np.exp(lambda_v[i] + nu_v[i]/2)) + (0.5 * (1.0 / nu_v[i]))
 				d2f = - np.dot((0.25 * (self._W/zeta_v)), np.exp(lambda_v[i] + nu_v[i]/2)) - (0.5 * (1.0 / nu_v[i] * nu_v[i]))
 				log_nu_v[i] = log_nu_v[i] - (df * nu_v[i])/(d2f * nu_v[i] * nu_v[i] + df * nu_v[i])
@@ -541,7 +539,7 @@ class CTM:
 				for n in range(self._K):
 					phi_sum[n] = phi_v[j,n]
 			corpus_phi_sum[i] = phi_sum
-		avg_niter avg_niter / self._D
+		avg_niter = avg_niter / self._D
 		converged_pct = converged_pct / self._D
 		total_lhood = total
 		return total_lhood
