@@ -202,44 +202,45 @@ class CTM:
 				phi_v[n,i] = np.exp(log_phi_v[n,i])
 		return (phi_v, log_phi_v)
 
-	# next three functions to optimize lambda
-	def f_lambda(self, sum_phi, phi_v, lambda_v, nu_v, zeta_v):
-		temp1 = np.zeros(self._K)
-		# temp = [[0 for i in range(self._K)] for j in range(4)]
-		term1 = term2 = term3 = 0
-
-		# compute lambda^T * \sum phi
-		term1 = np.dot(lambda_v * sum_phi)
-		# compute lambda - mu (= temp1)
-		temp1 += np.subtract(lambda_v, self.mu)
-		# compute (lambda - mu)^T Sigma^-1 (lambda - mu)
-		term2 = (-0.5) * temp[1] * self.inv_cov * temp[1]
-		# last term
-		for i in range(self._K):
-			term3 += np.exp(lambda_v[i] + 0.5 * nu_v[i])
-		# need to figure out how term3 is calculated
-		term3 =  -((1.0/zeta_v) * term3 - 1.0 + np.log(zeta_v)) * self._K
-		return (-(term1 + term2 + term3))
-
-	def df_lambda(self, sum_phi, lambda_v, nu_v, zeta_v):
-		# compute \Sigma^{-1} (\mu - \lambda)
-		temp0= self.inv_cov * np.subtract(self.mu - lambda_v)
-		temp3 =  np.zeros(self._K)
-
-		#  compute - (N / \zeta) * exp(\lambda + \nu^2 / 2)
-		for i in range(self._K):
-			temp3[i] = np.dot((self._D / zeta_v), np.exp(lambda_v[i] + np.dot(0.5, nu_v[i])))
-
-		# set return value (note negating derivative of bound)
-		df = np.zeros(self._K)
-		df -= np.subtract(np.subtract(temp0, sum_phi),temp3)
-		return df
-
 	def opt_lambda(self, phi_v, nu_v, zeta_v):
+		# optimize lambda
 		sum_phi = np.zeros(self._K)
 		for i in range(self._W):
 			for j in range(self._K):
 				sum_phi[j] = self.wordcts[i] * phi_v[i,j]
+		# inline function, define f for fmin_cg		
+		def f_lambda(self, sum_phi, phi_v, lambda_v, nu_v, zeta_v):
+			temp1 = np.zeros(self._K)
+			# temp = [[0 for i in range(self._K)] for j in range(4)]
+			term1 = term2 = term3 = 0
+
+			# compute lambda^T * \sum phi
+			term1 = np.dot(lambda_v * sum_phi)
+			# compute lambda - mu (= temp1)
+			temp1 += np.subtract(lambda_v, self.mu)
+			# compute (lambda - mu)^T Sigma^-1 (lambda - mu)
+			term2 = (-0.5) * temp[1] * self.inv_cov * temp[1]
+			# last term
+			for i in range(self._K):
+				term3 += np.exp(lambda_v[i] + 0.5 * nu_v[i])
+			# need to figure out how term3 is calculated
+			term3 =  -((1.0/zeta_v) * term3 - 1.0 + np.log(zeta_v)) * self._K
+			return (-(term1 + term2 + term3))
+
+		# inline function, define f_prime for fmin_cg
+		def df_lambda(self, sum_phi, lambda_v, nu_v, zeta_v):
+			# compute \Sigma^{-1} (\mu - \lambda)
+			temp0= self.inv_cov * np.subtract(self.mu - lambda_v)
+			temp3 =  np.zeros(self._K)
+
+			#  compute - (N / \zeta) * exp(\lambda + \nu^2 / 2)
+			for i in range(self._K):
+				temp3[i] = np.dot((self._D / zeta_v), np.exp(lambda_v[i] + np.dot(0.5, nu_v[i])))
+
+			# set return value (note negating derivative of bound)
+			df = np.zeros(self._K)
+			df -= np.subtract(np.subtract(temp0, sum_phi),temp3)
+			return df
 
 		lambda_v = fmin_cg(f_lambda, lambda_v, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 		return lambda_v
