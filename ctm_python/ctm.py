@@ -12,6 +12,7 @@ import logging	# having decided to use this or not
 import itertools	# do iteration work, obviously
 
 import numpy as np 	# standard numpy
+import scipy as sp 	# standard scipy
 from scipy.special import gammaln, digamma, psi 	# gamma function utils
 # log(sum(exp(x))) that tries to avoid overflow
 from scipy.maxentropy import logsumexp
@@ -19,7 +20,7 @@ from scipy.maxentropy import logsumexp
 from scipy.optimize import fmin_cg
 from scipy import stats  							# calculate pdf of gaussian
 # take the advantages of gensim provides
-from gensim import interfaces, utils
+from gensim import corpora, models, similarities, interfaces, utils
 #  mainly to perform covariance shrinkage
 from sklearn.covariance import LedoitWolf
 
@@ -43,93 +44,45 @@ def log_sum(log_a,log_b):
 		v = log_a + np.log(1+ np.exp(log_b - log_a))
 	return v
 
-'''
-parse docuemnts
-'''
-def parse_doc_list(docs, vocab):
-	"""
-	Parse a document into a list of word ids and a list of counts,
-	or parse a set of documents into two lists of lists of word ids
-	and counts.
-
-	Arguments:
-	docs:  List of D documents. Each document must be represented as
-		   a single string. (Word order is unimportant.) Any
-		   words not in the vocabulary will be ignored.
-	vocab: Dictionary mapping from words to integer ids.
-
-	Returns a pair of lists of lists.
-
-	The first, wordids, says what vocabulary tokens are present in
-	each document. wordids[i][j] gives the jth unique token present in
-	document i. (Don't count on these tokens being in any particular
-	order.)
-
-	The second, wordcts, says how many times each vocabulary token is
-	present. wordcts[i][j] is the number of times that the token given
-	by wordids[i][j] appears in document i.
-	"""
-	if (type(docs).__name__ == 'str'):
-		temp = list()
-		temp.append(docs)
-		docs = temp
-
-	# number of all the documents in corpus
-	D = len(docs)
-	# wordids represent the index of each word
-	wordids = list()
-	#  wordcts represent the number each word appears
-	wordcts = list()
-	for d in range(0, D):
-		docs[d] = docs[d].lower()
-		docs[d] = re.sub(r'-', ' ', docs[d])
-		docs[d] = re.sub(r'[^a-z ]', '', docs[d])
-		docs[d] = re.sub(r' +', ' ', docs[d])
-		words = string.split(docs[d])
-		ddict = dict()
-		for word in words:
-			if (word in vocab):
-				wordtoken = vocab[word]
-				if (not wordtoken in ddict):
-					ddict[wordtoken] = 0
-				ddict[wordtoken] += 1
-		wordids.append(ddict.keys())
-		wordcts.append(ddict.values())
-
-	return((wordids, wordcts))
-
 class CTM:
 	"""
 	Correlated Topic Models in Python
 
+	TODO : USAGE NEEDED 
+
 	"""
-	def __init__(self, vocab, K, D, mu, cov):
+	def __init__(self, docs, K, D, mu, cov):
 		'''
 		Arguments:
+			docs: list of documents to be processed
 			K: Number of topics
-			vocab: A set of words to recognize. When analyzing documents, any word not in this set will be ignored.
 			D: Total number of documents in the population. For a fixed corpus,
 			   this is the size of the corpus.
-
 			mu and cov: the hyperparameters logistic normal distribution for prior on weight vectors theta
 		'''
+		# remove common words and tokenize
+		# TODO: maintain the stoplist, or to get rid of it
+		stoplist = set('for a of the and to in'.split())
+		texts = [[word for word in document.lower().split() if word not in stoplist] for document in docs]
 
-		self._vocab = dict()
-		for word in vocab:
-			word = word.lower()
-			word = re.sub(r'[^a-z]', '', word)
-			self._vocab[word] = len(self._vocab)
+		# remove words that appear only once
+		all_tokens = sum(texts, [])
+		tokens_once = set(word for word in set(all_tokens) if all_tokens.count(word) == 1)
+		texts = [[word for word in text if word not in tokens_once] for text in texts]
+
+		# construct the word <--> id mapping
+		dictionary = corpora.Dictionary(texts)
+		# store the dictionary, for future reference
+		dictionary.save('ctm_dict.dict')
+		# the actual mapping, print it or not, whatever
+		# print dictionary.token2id
+		corpus = [dictionary.doc2bow(text) for text in texts]
+		# store to disk in Market Matrix format, for later use
+		corpora.MmCorpus.serialize('ctm_corpus.mm', corpus)
 
 		self._K = K 					# number of topics
-		self._W = len(self._vocab) 	# number of all the words
-		self._D = D 					# number of documents
-
-		(wordids, wordcts) = parse_doc_list(docs, self._vocab)
-		self.wordids = wordids
-		self.wordcts = wordcts
-		# distinct number of terms, I don't know what's the use for this, but just
-		# leave it here
-		self.nterms = len(self.wordids)
+		self._W = len(dictionary) 	# number of all the words
+		self._D = len(corpus) 		# number of documents
 
 		# mu : K-size vector with 0 as initial value
 		# cov  : K*K matrix with 1 as initial value , together they make a Gaussian
@@ -151,7 +104,8 @@ class CTM:
 		seed = 1115574245
 		sum = 0
 		self.beta = np.zeros([self._K,self._W])
-		self.log_beta = np.zeros([self._K,self._W]) # log 0 is inf, so just to make it 0
+		self.log_beta = np.zeros([self._K,self._W]) 
+		# log 0 is inf, so just to make it 0
 
 		# little function to perform element summation
 		def element_add_1(x):
@@ -235,7 +189,8 @@ class CTM:
 
 			#  compute - (N / \zeta) * exp(\lambda + \nu^2 / 2)
 			for i in range(self._K):
-				temp3[i] = np.dot((self._D / zeta_v), np.exp(lambda_v[i] + np.dot(0.5, nu_v[i])))
+				temp3[i] = np.dot((self._D / zeta_v), np.exp(lambda_v[i] + 
+					np.dot(0.5, nu_v[i])))
 
 			# set return value (note negating derivative of bound)
 			df = np.zeros(self._K)
@@ -338,17 +293,13 @@ class CTM:
 			converged_v = 1
 		return (lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
 
-	def update_expected_ss(self, lambda_v, nu_v, phi_v, ids, cts):
+	def update_expected_ss(self, lambda_v, nu_v, phi_v, wordids, wordcts):
 		'''
 		Arguments:
 			variational paraments and doc paraments
 		Returns:
 			sufficient statistics
 		'''
-
-		ids = ids
-		cts = cts
-
 		# covariance and mean suff stats
 		for i in range(self._K):
 			self.mu[i] = lambda_v[i]
@@ -361,8 +312,8 @@ class CTM:
 		# topics suff stats
 		for i in range(self._W):
 			for j in range(self._K):
-				w = ids[i] # d->word[i], is it the index of the i-th word?
-				self.beta[j,w] = self.beta[j,w] + cts[i] * phi_v[i,j]
+				w = wordids[i] # d->word[i], is it the index of the i-th word?
+				self.beta[j,w] = self.beta[j,w] + wordcts[i] * phi_v[i,j]
 		# number of data
 		self.ndata += 1
 
@@ -512,15 +463,11 @@ class CTM:
 		avg_niter = 0.0
 		converged_pct = 0.0
 		total = 0.0
-
 		phi_sum = np.zeros(self._K)
 
-		(wordids, wordcts) = parse_doc_list(docs, self._vocab)
-		ndocs = len(docs)		# number of docs in this corpus 
-
-		for i in range(ndocs):
-			ids = self.wordids[i]
-			cts = self.wordcts[i]
+		for d, doc in enumerate(corpus):
+			wordids = [id for id, _ in doc]
+			wordcts = np.array([cnt for _, cnt in doc])
 
 			# initialize the variational parameters
 			phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
@@ -530,16 +477,16 @@ class CTM:
 			lambda_v = np.zeros(self._K)
 
 			(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
-			update_expected_ss(self, lambda_v, nu_v, phi_v, ids, cts)
+			update_expected_ss(self, lambda_v, nu_v, phi_v, wordids, wordcts)
 			total += lhood
 			avg_niter = niter_v
 			converged_pct = converged_v
-			corpus_lambda[i] = lambda_v
-			corpus_nu[i] = nu_v
+			corpus_lambda[d] = lambda_v
+			corpus_nu[d] = nu_v
 			for j in range(self._W):
 				for n in range(self._K):
 					phi_sum[n] = phi_v[j,n]
-			corpus_phi_sum[i] = phi_sum
+			corpus_phi_sum[d] = phi_sum
 		avg_niter = avg_niter / self._D
 		converged_pct = converged_pct / self._D
 		total_lhood = total
@@ -622,25 +569,21 @@ class CTM:
 
 		# approximate inference
 		for i in range(self._D):
-			ids_doc = self.ids[i]
-			cts_doc = self.cts[i]
-			temp_sum = 0
+			# initialize the variational parameters
+			phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
+			log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
+			zeta_v = 0.0
+			nu_v = np.zeros(self._K)
+			lambda_v = np.zeros(self._K)
 
-		# initialize the variational parameters
-		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
-		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
-		zeta_v = 0.0
-		nu_v = np.zeros(self._K)
-		lambda_v = np.zeros(self._K)
+			(lhood[i],phi_v, log_phi_v, lambda_corpus[i], nu_corpus[i], zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
 
-		(lhood[i],phi_v, log_phi_v, lambda_corpus[i], nu_corpus[i], zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+			for j in range(self._K):
+				for n in range(self._W):
+					phi_sums_corpus[i,j] += phi_v[n,j]
 
-		for j in range(self._K):
-			for n in range(self._W):
-				phi_sums_corpus[i,j] += phi_v[n,j]
-
-		# output likelihood and some variational parameters
-		# write them to files
+		# write likelihood and some variational parameters
+		#  to files
 		with open('ctm_lhood','w') as ctm_lhood_dump:
 			cPickle.dump(lhood,ctm_looh_dump)
 		with open('corpus_lambda','w') as corpus_lambda_dump:
@@ -649,7 +592,6 @@ class CTM:
 			cPickle.dump(corpus_nu, corpus_nu_dump)
 		with open('phi_sums','w') as phi_sums_dump:
 			cPickle.dump(phi_sums,phi_sums_dump)
-
 
 	def pod_experiment(self, docs, proportions = 0.5):
 		''' Calculate perplexity value
@@ -689,6 +631,8 @@ class CTM:
 		log_lhood = np.zeros(self._D)
 		e_theta = np.zeros(self._K)
 
+
+		# TODO : FIX THE IDS AND CTS
 		# for the sake of simplicity, proportion between 
 		# observed doc and held-out doc are set to 0.5, no other value
 		for i in range(len(obs_docs)):
