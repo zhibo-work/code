@@ -24,16 +24,6 @@ from gensim import corpora, models, similarities, interfaces, utils
 #  mainly to perform covariance shrinkage
 from sklearn.covariance import LedoitWolf
 
-meanchangethresh = 0.001
-
-def dirichlet_expectation(alpha):
-	"""
-	For a vector theta ~ Dir(alpha), computes E[log(theta)] given alpha.
-	"""
-	if (len(alpha.shape) == 1):
-		return(psi(alpha) - psi(np.sum(alpha)))
-	return(psi(alpha) - psi(np.sum(alpha, 1))[:, np.newaxis])
-
 def log_sum(log_a,log_b):
 	v = 0
 	if log_a == -1:
@@ -51,7 +41,7 @@ class CTM:
 	TODO : USAGE NEEDED 
 
 	"""
-	def __init__(self, docs, K, D, mu, cov):
+	def __init__(self, docs,  K, mu=None, cov=None):
 		'''
 		Arguments:
 			docs: list of documents to be processed
@@ -61,7 +51,7 @@ class CTM:
 			mu and cov: the hyperparameters logistic normal distribution for prior on weight vectors theta
 		'''
 		# remove common words and tokenize
-		# TODO: maintain the stoplist, or to get rid of it
+		# TODO: maintain the stoplist, or get rid of it
 		stoplist = set('for a of the and to in'.split())
 		texts = [[word for word in document.lower().split() if word not in stoplist] for document in docs]
 
@@ -70,19 +60,25 @@ class CTM:
 		tokens_once = set(word for word in set(all_tokens) if all_tokens.count(word) == 1)
 		texts = [[word for word in text if word not in tokens_once] for text in texts]
 
-		# construct the word <--> id mapping
+		# construct the word <--> id mapping utilizing Gensim
 		dictionary = corpora.Dictionary(texts)
 		# store the dictionary, for future reference
 		dictionary.save('ctm_dict.dict')
 		# the actual mapping, print it or not, whatever
 		# print dictionary.token2id
 		corpus = [dictionary.doc2bow(text) for text in texts]
-		# store to disk in Market Matrix format, for later use
-		corpora.MmCorpus.serialize('ctm_corpus.mm', corpus)
+		# store to disk in Blei's LDA-C format, for later use
+		corpora.BleiCorpus.serialize('ctm_corpus.mm', corpus)
+
+		self.corpus = corpus
 
 		self._K = K 					# number of topics
 		self._W = len(dictionary) 	# number of all the words
 		self._D = len(corpus) 		# number of documents
+
+		for d, doc in enumerate(self.corpus):
+			wordids = [id for id, _ in doc]
+			wordcts = np.array([cnt for _, cnt in doc])
 
 		# mu : K-size vector with 0 as initial value
 		# cov  : K*K matrix with 1 as initial value , together they make a Gaussian
@@ -101,19 +97,14 @@ class CTM:
 		self.ndata = 0 # cumulate count of number of docs processed
 
 		# initialize topic distribution, i.e. self.log_beta
-		seed = 1115574245
 		sum = 0
 		self.beta = np.zeros([self._K,self._W])
 		self.log_beta = np.zeros([self._K,self._W]) 
-		# log 0 is inf, so just to make it 0
 
-		# little function to perform element summation
-		def element_add_1(x):
-			return x + 1.0 + np.random.randint(seed)
-		self.log_beta = map(element_add_1, wordcts)
-		# for i in xrange(self._K):
-		# 	for n in xrange(self._W):
-		# 		self.log_beta[i,n] = wordcts[i,n] + 1.0 +np.random.randint(seed)
+		for i in xrange(self._K):
+			for n in xrange(self._W):
+				self.log_beta[i,n] = wordcts[n] + 1.0 +np.random.ranf()
+
 		# to initialize and smooth
 		sum = np.log(np.sum(self.log_beta))
 
@@ -122,16 +113,6 @@ class CTM:
 			return x + np.log(x-sum)
 		self.log_beta = map(element_add_2,self.log_beta)
 
-	'''
-	before the actual variational inference
-	below are some funtions to deal with the variational
-	parameters to be used in variational inference, namely
-	add '_v' to indicate variational parameter
-	* zeta_v
-	* phi_v
-	* lambda_v, in order to distinguish python's own function name.
-	* nu_v
-	'''
 
 	def opt_zeta(lambda_v,nu_v):
 		# optimize zeta
@@ -142,6 +123,7 @@ class CTM:
 	def opt_phi(self, lambda_v,log_phi_v):
 		# optimize phi
 		log_sum_n = 0
+		phi_v = np.zeros_like(log_phi_v)
 		for n in range(self._W):
 			log_sum_n = 0
 			for i in range(self._K):
@@ -156,8 +138,9 @@ class CTM:
 				phi_v[n,i] = np.exp(log_phi_v[n,i])
 		return (phi_v, log_phi_v)
 
-	def opt_lambda(self, phi_v, nu_v, zeta_v):
+	def opt_lambda(self, lambda_v, phi_v, nu_v, zeta_v):
 		# optimize lambda
+		lambda_ini = lambda_v
 		sum_phi = np.zeros(self._K)
 		for i in range(self._W):
 			for j in range(self._K):
@@ -165,15 +148,14 @@ class CTM:
 		# inline function, define f for fmin_cg		
 		def f_lambda(self, sum_phi, phi_v, lambda_v, nu_v, zeta_v):
 			temp1 = np.zeros(self._K)
-			# temp = [[0 for i in range(self._K)] for j in range(4)]
-			term1 = term2 = term3 = 0
 
+			term1 = term2 = term3 = 0
 			# compute lambda^T * \sum phi
 			term1 = np.dot(lambda_v * sum_phi)
 			# compute lambda - mu (= temp1)
 			temp1 += np.subtract(lambda_v, self.mu)
 			# compute (lambda - mu)^T Sigma^-1 (lambda - mu)
-			term2 = (-0.5) * temp[1] * self.inv_cov * temp[1]
+			term2 = (-0.5) * temp1 * self.inv_cov * temp1
 			# last term
 			for i in range(self._K):
 				term3 += np.exp(lambda_v[i] + 0.5 * nu_v[i])
@@ -196,8 +178,8 @@ class CTM:
 			df = np.zeros(self._K)
 			df -= np.subtract(np.subtract(temp0, sum_phi),temp3)
 			return df
-
-		lambda_v = fmin_cg(f_lambda, lambda_v, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
+		# here, lambda_ini serves as initial value of lambda_v
+		lambda_v = fmin_cg(f_lambda, lambda_ini, fprime = df_lambda,gtol = 1e-5, epsilon = 0.01, maxiter = 500)
 		return lambda_v
 
 	def opt_nu(self, lambda_v, zeta_v):
@@ -219,13 +201,9 @@ class CTM:
 
 		return nu_v
 
-	'''
-	the actual variational inference process
-
-	'''
-
 	def lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v):
-		''' compute the likelihood bound give the variational parameters
+		''' 
+		compute the likelihood bound given the variational parameters
 
 		Arguments:
 			variational parameters
@@ -246,11 +224,9 @@ class CTM:
 			lhood += v
 
 		# E[log p(z_n | \eta)] + E[log p(w_n | \beta)] + H(q(z_n | \phi_n))
-
 		# Equation 7 in paper, calculate the upper bound
 		sum_exp = np.sum(np.exp(lambda_v) + 0.5 * nu_v)
 		bound = (1.0 / zeta_v) * sum_exp - 1.0 + np.log(zeta_v)
-
 		lhood -= bound * self._D
 
 		for i in range(self._W):
@@ -258,29 +234,34 @@ class CTM:
 				if phi_v[i,j] > 0:
 					topic_scores[j] = phi_v[i,j] * (topic_scores[j] + self.cts[i])
 					lhood += self.cts[i] * phi_v[i,j] * (lambda_v[j] + self.log_beta[j,i] - log_phi_v[i,j])
-		lhood_v = lhood
-		return lhood_v
+		return lhood
 
-	# variational inference
 	def var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v):
-		
-		niter = 0.0
+		'''Variational inference
+		Arguments:
+			variational parameters.
+
+		Returns:
+			likelihood bound and updated variational parameters
+		'''
+		niter = 0
 		lhood_v = 0.0
 		lhood_old = 0.0
 		convergence = 0.0
 
-		lhood_v = lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
+		lhood_v = self.lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
 		while ((convergence > 1e-5) & (niter < 500)):
 			niter += 1
-			zeta_v = opt_zeta(lambda_v,nu_v)
-			lambda_v = opt_lambda(self, phi_v, nu_v, zeta_v)
-			zeta_v = opt_zeta(lambda_v,nu_v)
-			nu_v = opt_nu(self, lambda_v, zeta_v);
-			zeta_v = opt_zeta(lambda_v,nu_v)
-			(phi_v, log_phi_v) = opt_phi(self, lambda_v,log_phi_v);
+
+			zeta_v = self.opt_zeta(lambda_v,nu_v)
+			lambda_v = self.opt_lambda(self, lambda_v,phi_v, nu_v, zeta_v)
+			zeta_v = self.opt_zeta(lambda_v,nu_v)
+			nu_v = self.opt_nu(self, lambda_v, zeta_v);
+			zeta_v = self.opt_zeta(lambda_v,nu_v)
+			(phi_v, log_phi_v) = self.opt_phi(self, lambda_v,log_phi_v);
 
 			lhood_old = lhood_v
-			lhood_v = lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
+			lhood_v = self.lhood_bnd(self, phi_v,log_phi_v, lambda_v, nu_v, zeta_v)
 
 			convergence = np.fabs((lhood_old - lhood_v)/lhood_old)
 
@@ -289,12 +270,16 @@ class CTM:
 		
 		if convergence > 1e-5:
 			converged_v = 0
+			print 'variational inference ended with converge'
 		else:
 			converged_v = 1
-		return (lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+			print 'variational inference ended without converge, but reached iteration limit'
+		return (lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v, niter, converged_v)
 
 	def update_expected_ss(self, lambda_v, nu_v, phi_v, wordids, wordcts):
 		'''
+		Update sufficient statistics, mu, cov and beta.
+
 		Arguments:
 			variational paraments and doc paraments
 		Returns:
@@ -317,9 +302,9 @@ class CTM:
 		# number of data
 		self.ndata += 1
 
-	def sample_term(self, eta, lambda_v, nu_v):
+	def sample_term(self, eta, lambda_v, nu_v,wordcts):
 		'''
-		importance sampling the likelihood based on the variational posterior
+		Importance sampling the likelihood based on the variational posterior
 		
 		Arguments:
 			eta : natural parameter of logistic normal distribution
@@ -344,12 +329,11 @@ class CTM:
 			word_term = 0
 			for i in range(self._K):
 				word_term += theta[i] * np.exp(self.log_beta[i,n])
-			t1 += count[n] * np.log(word_term)
+			t1 += wordcts[n] * np.log(word_term)
 		# log(q(\eta | lambda, nu))
 		t2 = 0
 		for i in range(self._K):
-			t2 += stats.norm.pdf(eta[i] - lambda_v[i], np.log(lambda_v[i]), loc=0, np.sqrt(nu_v[i]),1.0)
-			# pdf of lognorm dist. parameters are (x, scale(mu), loc, shape(sigma))
+			t2 += stats.norm.pdf(eta[i] - lambda_v[i], np.sqrt(nu_v[i]))
 		return(t1-t2)
 
 
@@ -373,9 +357,9 @@ class CTM:
 		for n in range(self._W):
 			# sample eta from q(\eta)
 			for i in range(self._K):
-				eta[i] = random.gauss(0, np.sqrt(nu[i])) + lambda_v[i]
+				eta[i] = random.gauss(0, np.sqrt(nu_v[i])) + lambda_v[i]
 			# compute p(w | \eta) - q(\eta)
-			log_prob = sample_term(self,eta, lambda_v, nu_v)
+			log_prob = self.sample_term(self,eta, lambda_v, nu_v)
 			# compute theta
 			theta = eta[:]
 			sum_t = np.sum(np.exp(eta))
@@ -405,7 +389,7 @@ class CTM:
 	'''
 	estimate stage
 	'''
-	def em(self):
+	def em(self, docs):
 
 		# load model parameters
 		# load gaussian
@@ -419,16 +403,17 @@ class CTM:
 			self.log_det_inv_cov = cPickle.load(ctm_log_det_inv_cov_dump)
 		# load topic matrix 
 		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
-			self.log_beta = cPickle.load(log_beta_dump)
+			self.log_beta = cPickle.load(ctm_log_beta_dump)
 
 		# the main function
 		iteration = 0
 		convergence = 1.0
 		lhood = lhood_old =  0.0
-		avg_niter = converged_pct = old_conv = 0.0
+		# avg_niter = converged_pct =
+		# old_conv = 0.0
 		reset_var = 1
 		var_max_iter = 500
-		var_convergence = 1e-5
+		# var_convergence = 1e-5
 
 		corpus_lambda = np.zeros((self._D,self._K))
 		corpus_nu = np.zeros((self._D,self._K))
@@ -436,7 +421,7 @@ class CTM:
 
 		while ((iteration < 1000) and ((convergence > 1e-3) or (convergence < 0))):
 			# e-step
-			lhood= expectation(self, docs)
+			lhood= self.expectation(self, docs, corpus_lambda, corpus_nu, corpus_phi_sum)
 			convergence = (lhood_old - lhood) / lhood_old
 
 			# m-step
@@ -447,13 +432,13 @@ class CTM:
 				else:
 					var_max_iter = var_max_iter / 10
 			else:
-				maximization(self)
+				self.maximization(self)
 				lhood_old = lhood
 				reset_var = 1
 				iteration += 1
-			old_conv = convergence
+			# old_conv = convergence
 
-	def expectation(self, docs):
+	def expectation(self, docs, corpus_lambda, corpus_nu, corpus_phi_sum):
 		''' E-step of EM algorithm
 		Arguments:
 			corpus: the docs needed to be worked on, need to get ids and cts
@@ -465,7 +450,7 @@ class CTM:
 		total = 0.0
 		phi_sum = np.zeros(self._K)
 
-		for d, doc in enumerate(corpus):
+		for d, doc in enumerate(self.corpus):
 			wordids = [id for id, _ in doc]
 			wordcts = np.array([cnt for _, cnt in doc])
 
@@ -476,9 +461,9 @@ class CTM:
 			nu_v = np.zeros(self._K)
 			lambda_v = np.zeros(self._K)
 
-			(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
-			update_expected_ss(self, lambda_v, nu_v, phi_v, wordids, wordcts)
-			total += lhood
+			(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v, niter_v, converged_v) = self.var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+			self.update_expected_ss(self, lambda_v, nu_v, phi_v, wordids, wordcts)
+			total += lhood_v
 			avg_niter = niter_v
 			converged_pct = converged_v
 			corpus_lambda[d] = lambda_v
@@ -508,10 +493,10 @@ class CTM:
 		# covariance maximization
 		for i in range(self._K):
 			for j in range(self._K):
-				cov[i,j] = (1.0/ self.ndata) * self.cov[i,j] + self.ndata * mu[i] * mu[j] - self.mu[i] * mu[j] - self.mu[j] * mu[i]
+				self.cov[i,j] = (1.0/ self.ndata) * self.cov[i,j] + self.ndata * mu[i] * mu[j] - self.mu[i] * mu[j] - self.mu[j] * mu[i]
 		# covariance shrinkage
 		lw = LedoitWolf()
-		cov_result = lw.fit(cov,assume_centered=True).covariance_
+		cov_result = lw.fit(self.cov,assume_centered=True).covariance_
 		self.inv_cov = np.linalg.inv(cov_result)
 		self.log_det_inv_cov = np.log(np.linalg.det(self.inv_cov))
 
@@ -540,7 +525,7 @@ class CTM:
 			cPickle.dump(self.log_det_inv_cov,ctm_log_det_inv_cov_dump)
 		# write topic matrix 
 		with open('ctm_log_beta','w') as ctm_log_beta_dump:
-			cPickle.dump(self.log_beta,log_beta_dump)
+			cPickle.dump(self.log_beta,ctm_log_beta_dump)
 
 
 	def inference(self):
@@ -559,7 +544,7 @@ class CTM:
 			self.log_det_inv_cov = cPickle.load(ctm_log_det_inv_cov_dump)
 		# load topic matrix 
 		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
-			self.log_beta = cPickle.load(log_beta_dump)
+			self.log_beta = cPickle.load(ctm_log_beta_dump)
 
 		# corpus level parameter initialization
 		lhood_corpus = np.zeros(self._D)
@@ -576,7 +561,7 @@ class CTM:
 			nu_v = np.zeros(self._K)
 			lambda_v = np.zeros(self._K)
 
-			(lhood[i],phi_v, log_phi_v, lambda_corpus[i], nu_corpus[i], zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+			(lhood_corpus[i],phi_v, log_phi_v, lambda_corpus[i], nu_corpus[i], zeta_v,_) = self.var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
 
 			for j in range(self._K):
 				for n in range(self._W):
@@ -585,7 +570,7 @@ class CTM:
 		# write likelihood and some variational parameters
 		#  to files
 		with open('ctm_lhood','w') as ctm_lhood_dump:
-			cPickle.dump(lhood,ctm_looh_dump)
+			cPickle.dump(lhood_corpus,ctm_looh_dump)
 		with open('corpus_lambda','w') as corpus_lambda_dump:
 			cPickle.dump(corpus_lambda,corpus_lambda_dump)
 		with open('corpus_nu','w') as corpus_nu_dump:
@@ -626,7 +611,7 @@ class CTM:
 			self.log_det_inv_cov = cPickle.load(ctm_log_det_inv_cov_dump)
 		# load topic matrix 
 		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
-			self.log_beta = cPickle.load(log_beta_dump)
+			self.log_beta = cPickle.load(ctm_log_beta_dump)
 
 		log_lhood = np.zeros(self._D)
 		e_theta = np.zeros(self._K)
@@ -651,7 +636,7 @@ class CTM:
 		lambda_v = np.zeros(self._K)
 
 		(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
-		e_theta = expected_theta(self, lambda_v, nu_v)
+		e_theta = self.expected_theta(self, lambda_v, nu_v)
 		for j in range(len(heldout_docs)):
 			#  approximate inference of held out data
 			l = log_mult_prob(self, cts, e_theta)
