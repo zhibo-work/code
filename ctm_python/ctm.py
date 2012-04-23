@@ -302,90 +302,6 @@ class CTM:
 		# number of data
 		self.ndata += 1
 
-	def sample_term(self, eta, lambda_v, nu_v,wordcts):
-		'''
-		Importance sampling the likelihood based on the variational posterior
-		
-		Arguments:
-			eta : natural parameter of logistic normal distribution
-			theta : mean parameter of logistic normal distribution
-			The mapping between them is equation 3 in the paper:
-					eta[i] = log theta[i] / theta[K]
-		Returns:
-			value of p(w | eta) - q(eta)
-		'''
-		t1 = 0.5 * self.log_det_inv_cov
-		t1 += -(0.5) * self._K * 1.837877 # 1.837877 is the natural logarithm of 2*pi
-		for i in range(self._K):
-			for j in range(self._K):
-				t1 -= (0.5) * (eta[i] - self.mu[i]) * self.inv_cov[i,j] * (eta[j] - self.mu[j])
-		# compute theta
-		theta = eta[:]
-		sum_t = np.sum(np.exp(eta))
-		theta = np.divide(theta, sum_t)
-
-		# compute word probabilities
-		for n in range(self._W):
-			word_term = 0
-			for i in range(self._K):
-				word_term += theta[i] * np.exp(self.log_beta[i,n])
-			t1 += wordcts[n] * np.log(word_term)
-		# log(q(\eta | lambda, nu))
-		t2 = 0
-		for i in range(self._K):
-			t2 += stats.norm.pdf(eta[i] - lambda_v[i], np.sqrt(nu_v[i]))
-		return(t1-t2)
-
-
-	def expected_theta(self, lambda_v, nu_v):
-		''' Return expected theta under a variational distribution
-
-		Args:
-			self : use all the parameters initialized before
-			lambda_v : variational parameter lambda
-			nu_v : variational parameter nu
-
-		Returns:
-			val : the expected theta
-		'''
-		nsamples = 100
-		eta = np.zeros(self._K)
-		theta = eta[:]
-		# initialize e_theta
-		e_theta = -1.0 * np.ones(self._K)
-		# for each sample
-		for n in range(self._W):
-			# sample eta from q(\eta)
-			for i in range(self._K):
-				eta[i] = random.gauss(0, np.sqrt(nu_v[i])) + lambda_v[i]
-			# compute p(w | \eta) - q(\eta)
-			log_prob = self.sample_term(self,eta, lambda_v, nu_v)
-			# compute theta
-			theta = eta[:]
-			sum_t = np.sum(np.exp(eta))
-			theta = np.divide(theta, sum_t)
-
-			# update e_theta
-			for i in range(self._K):
-				e_theta[i] = log_sum(e_theta[i], log_prob + np.log(theta[i]))
-		# normalize e_theta and set return vector
-		sum_et = -1.0
-		for i in range(self._K):
-			e_theta[i] -= np.log(nsamples)
-			sum_et = log_sum(sum_et, e_theta[i])
-		e_theta = np.exp(np.subtract(e_theta, sum_et))
-		return e_theta
-
-	def log_mult_prob(self, cts, e_theta):
-		# log probability of the document under proportions theta and topics beta
-		val = 0
-		for i in range(self._W):
-			term_prob = 0
-			for k in range(len(self.log_beta)):
-				term_prob += e_theta[k] * np.exp(self.log_beta[k,i])
-			val += np.log(term_prob) * cts[i]
-		return val
-
 	'''
 	estimate stage
 	'''
@@ -578,6 +494,115 @@ class CTM:
 		with open('phi_sums','w') as phi_sums_dump:
 			cPickle.dump(phi_sums,phi_sums_dump)
 
+	def generate_corpus(self, docs):
+		stoplist = set('for a of the and to in'.split())
+		texts = [[word for word in document.lower().split() if word not in stoplist] for document in docs]
+
+		# remove words that appear only once
+		all_tokens = sum(texts, [])
+		tokens_once = set(word for word in set(all_tokens) if all_tokens.count(word) == 1)
+		texts = [[word for word in text if word not in tokens_once] for text in texts]
+
+		# construct the word <--> id mapping utilizing Gensim
+		dictionary = corpora.Dictionary(texts)
+		# store the dictionary, for future reference
+		# dictionary.save('ctm_dict.dict')
+		# the actual mapping, print it or not, whatever
+		# print dictionary.token2id
+		corpus = [dictionary.doc2bow(text) for text in texts]
+		# store to disk in Blei's LDA-C format, for later use
+		# corpora.BleiCorpus.serialize('ctm_corpus.mm', corpus)
+		return corpus
+
+	def sample_term(self, eta, lambda_v, nu_v,wordcts):
+		'''
+		Importance sampling the likelihood based on the variational posterior
+		
+		Arguments:
+			eta : natural parameter of logistic normal distribution
+			theta : mean parameter of logistic normal distribution
+			The mapping between them is equation 3 in the paper:
+					eta[i] = log theta[i] / theta[K]
+		Returns:
+			value of p(w | eta) - q(eta)
+		'''
+		t1 = 0.5 * self.log_det_inv_cov
+		t1 += -(0.5) * self._K * 1.837877 # 1.837877 is the natural logarithm of 2*pi
+		for i in range(self._K):
+			for j in range(self._K):
+				t1 -= (0.5) * (eta[i] - self.mu[i]) * self.inv_cov[i,j] * (eta[j] - self.mu[j])
+		# compute theta
+		theta = eta[:]
+		sum_t = np.sum(np.exp(eta))
+		theta = np.divide(theta, sum_t)
+
+		# compute word probabilities
+		for n in range(self._W):
+			word_term = 0
+			for i in range(self._K):
+				word_term += theta[i] * np.exp(self.log_beta[i,n])
+			t1 += wordcts[n] * np.log(word_term)
+		# log(q(\eta | lambda, nu))
+		t2 = 0
+		for i in range(self._K):
+			t2 += stats.norm.pdf(eta[i] - lambda_v[i], np.sqrt(nu_v[i]))
+		return(t1-t2)
+
+	def expected_theta(self, lambda_v, nu_v):
+		''' Return expected theta under a variational distribution
+
+		Args:
+			self : use all the parameters initialized before
+			lambda_v : variational parameter lambda
+			nu_v : variational parameter nu
+
+		Returns:
+			val : the expected theta
+		'''
+		nsamples = 100
+		eta = np.zeros(self._K)
+		theta = eta[:]
+		# initialize e_theta
+		e_theta = -1.0 * np.ones(self._K)
+		# for each sample
+		for n in range(self._W):
+			# sample eta from q(\eta)
+			for i in range(self._K):
+				eta[i] = random.gauss(0, np.sqrt(nu_v[i])) + lambda_v[i]
+			# compute p(w | \eta) - q(\eta)
+			log_prob = self.sample_term(self,eta, lambda_v, nu_v)
+			# compute theta
+			theta = eta[:]
+			sum_t = np.sum(np.exp(eta))
+			theta = np.divide(theta, sum_t)
+
+			# update e_theta
+			for i in range(self._K):
+				e_theta[i] = log_sum(e_theta[i], log_prob + np.log(theta[i]))
+		# normalize e_theta and set return vector
+		sum_et = -1.0
+		for i in range(self._K):
+			e_theta[i] -= np.log(nsamples)
+			sum_et = log_sum(sum_et, e_theta[i])
+		e_theta = np.exp(np.subtract(e_theta, sum_et))
+		return e_theta
+
+	def log_mult_prob(self, cts, e_theta):
+		'''
+		 log probability of the document under proportions theta and topics beta
+		 used to calculate the held-out data's probability 
+		 
+		 '''
+		val = 0
+		for i in range(self._W): 
+		# here the number W should be the number of held-out data
+		# log_beta should be initialized, not the old self.log_beta
+			term_prob = 0
+			for k in range(self._K):
+				term_prob += e_theta[k] * np.exp(self.log_beta[k,i])
+			val += np.log(term_prob) * cts[i]
+		return val
+
 	def pod_experiment(self, docs, proportions = 0.5):
 		''' Calculate perplexity value
 
@@ -594,10 +619,11 @@ class CTM:
 			perplexity : currently, the only evaluation value, add others later
 
 		'''
-		permute_docs = np.random.permutation(docs)
-		split_point = proportions * len(docs)
-		obs_docs = permute_docs[:split_point]
-		heldout_docs = permute_docs[split_point:]
+ 
+		log_lhood = np.zeros(self._D)
+		e_theta = np.zeros(self._K)
+		total_words = 0
+		total_lhood = 0
 
 		# load model parameters
 		# load gaussian
@@ -613,38 +639,33 @@ class CTM:
 		with open('ctm_log_beta','rb') as ctm_log_beta_dump:
 			self.log_beta = cPickle.load(ctm_log_beta_dump)
 
-		log_lhood = np.zeros(self._D)
-		e_theta = np.zeros(self._K)
+		permute_docs = np.random.permutation(docs)
+		split_point = proportions * len(docs)
+		obs_docs = permute_docs[:split_point]
+		heldout_docs = permute_docs[split_point:]
+
+		obs_corpus = self.generate_corpus(obs_docs)
+		held_corpus = self.generate_corpus(heldout_docs)
 
 
-		# TODO : FIX THE IDS AND CTS
-		# for the sake of simplicity, proportion between 
-		# observed doc and held-out doc are set to 0.5, no other value
-		for i in range(len(obs_docs)):
-			# get observed and heldout documents
-			obs_doc = obs_docs[i]
-			heldout_doc = heldout_docs[i]
-			#  compute variational distribution
-			
-		# read in the model parameter learnt by training process
+		for d, doc in enumerate(obs_corpus):
+			obs_wordids = [id for id, _ in doc]
+			obs_wordcts = np.array([cnt for _, cnt in doc])
+			(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = self.var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
+			e_theta = self.expected_theta(self, lambda_v, nu_v)
+		
+		for d, doc in enumerate(held_corpus):
+			held_wordids = [id for id, _ in doc]
+			held_wordcts = np.array([cnt for _, cnt in doc])
 
-		# initialize the variational parameters
-		phi_v = np.dot(1.0/self._K , np.ones((self._K,self._W)))
-		log_phi_v = np.dot(-(np.log(self._K)), np.ones((self._K,self._W)))
-		zeta_v = 0.0
-		nu_v = np.zeros(self._K)
-		lambda_v = np.zeros(self._K)
-
-		(lhood_v,phi_v, log_phi_v, lambda_v, nu_v, zeta_v) = var_inference(self, phi_v, log_phi_v, lambda_v, nu_v, zeta_v)
-		e_theta = self.expected_theta(self, lambda_v, nu_v)
-		for j in range(len(heldout_docs)):
 			#  approximate inference of held out data
-			l = log_mult_prob(self, cts, e_theta)
-			log_lhood[i] = l
-			total_words += len(heldout_doc[0])
+			l = self.log_mult_prob(self, held_wordcts, e_theta)
+			log_lhood[d] = l
+			total_words += len(held_wordids)
 			# TODO : make clear here  whether it is `heldout_doc[0]
 			# or `heldout_doc`
 			total_lhood += l
+
 		perplexity = np.exp(- total_lhood / total_words)
 		print 'the perplexity is:', perplexity
 
